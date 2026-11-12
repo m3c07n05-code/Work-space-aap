@@ -38,8 +38,8 @@ export const ProposedWorkGrid: React.FC<ProposedWorkGridProps> = ({ onSelectWork
     {
       id: 'UI-06',
       name: 'Jira SCRUM-1 / SCRUM-2',
-      url: 'https://njnatee99.atlassian.net',
-      desc: 'ระบบติดตามงาน CRD Backlog',
+      url: 'https://njnatee99.atlassian.net/browse/SCRUM-1',
+      desc: 'ระบบติดตามงาน CRD Backlog (SCRUM-1: Direct-RPT PDF & A6 Print)',
     },
   ];
 

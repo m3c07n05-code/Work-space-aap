@@ -20,7 +20,8 @@ import {
   Maximize2,
   Check,
   Zap,
-  Info
+  Info,
+  ExternalLink
 } from 'lucide-react';
 import {
   Work4StatusResponse,
@@ -245,6 +246,38 @@ export const Work4PrintStudio: React.FC<Work4PrintStudioProps> = ({
             </button>
           </div>
         </div>
+      </div>
+
+      {/* Jira (SCRUM-1) Link-Only Dashboard Card */}
+      <div className="p-4 sm:p-5 rounded-2xl bg-white/90 dark:bg-slate-900/90 border border-blue-200/90 dark:border-slate-800 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-blue-600/10 dark:bg-blue-500/20 flex items-center justify-center text-blue-600 dark:text-teal-400 font-bold shrink-0">
+            <ExternalLink className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-bold font-mono text-blue-700 dark:text-teal-300">JIRA: SCRUM-1</span>
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300">
+                Link-Only Dashboard
+              </span>
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                IN PROGRESS (STEP 3 DONE → STEP 4)
+              </span>
+            </div>
+            <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
+              ติดตามสถานะงาน WORK 4 Direct-RPT PDF Pipeline & A6 Print บน Atlassian Jira (SCRUM-1)
+            </p>
+          </div>
+        </div>
+        <a
+          href="https://njnatee99.atlassian.net/browse/SCRUM-1"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="px-4 py-2 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-1.5 transition-all shadow-xs cursor-pointer shrink-0 w-fit"
+        >
+          <span>เปิดดูบน Jira (SCRUM-1)</span>
+          <ExternalLink className="w-3.5 h-3.5" />
+        </a>
       </div>
 
       {/* Alert Notices */}
