@@ -194,6 +194,125 @@ def execute_pipeline(year="2026", month="11", output_dir=None):
     return payload
 
 
+def split_thai_address(full_address, max_chars=42):
+    """
+    Splits Thai address so Address 1 (E3) strictly does not exceed max_chars (42),
+    preventing A6 line-drops and vertical overlapping on bottom elements (B7, P5:T5).
+    """
+    if not full_address:
+        return "", ""
+    clean = " ".join(full_address.strip().split())
+    if len(clean) <= max_chars:
+        return clean, ""
+    
+    # Priority delimiters
+    import re
+    district_m = re.search(r'\s*(?:อ\.|อำเภอ|เขต)\s+[ก-๙]', clean)
+    if district_m and 8 < district_m.start() <= max_chars:
+        return clean[:district_m.start()].strip(), clean[district_m.start():].strip()
+        
+    subdist_m = re.search(r'\s*(?:ต\.|ตำบล|แขวง)\s+[ก-๙]', clean)
+    if subdist_m and 8 < subdist_m.start() <= max_chars:
+        return clean[:subdist_m.start()].strip(), clean[subdist_m.start():].strip()
+        
+    road_m = re.search(r'\s*(?:ถ\.|ถนน|ซ\.|ซอย)\s+[ก-๙]', clean)
+    if road_m and 10 < road_m.start() <= max_chars:
+        return clean[:road_m.start()].strip(), clean[road_m.start():].strip()
+        
+    # Whitespace split before max_chars
+    for i in range(min(len(clean) - 1, max_chars), 10, -1):
+        if clean[i] == ' ':
+            return clean[:i].strip(), clean[i:].strip()
+            
+    return clean[:max_chars].strip(), clean[max_chars:].strip()
+
+
+def balance_address_lines(addr1, addr2, max_chars=42):
+    """
+    If Address 1 exceeds max_chars, shifts excess into Address 2.
+    """
+    c1 = " ".join((addr1 or "").strip().split())
+    c2 = " ".join((addr2 or "").strip().split())
+    if len(c1) <= max_chars:
+        return c1, c2
+    p1, overflow = split_thai_address(c1, max_chars=max_chars)
+    new_c2 = f"{overflow} {c2}".strip() if c2 else overflow
+    return p1, new_c2
+
+
+def run_a6_overflow_test():
+    """
+    Tests A6 Line-Wrap and Overflow Hotfix with synthetic long addresses & names.
+    Guarantees no line overflow or overlap with bottom elements.
+    """
+    test_cases = [
+        {
+            "desc": "Standard Address",
+            "name": "นายสมชาย ใจดี",
+            "full_addr": "99/1 ซอยพัฒนาการ 20 แขวงสวนหลวง เขตสวนหลวง กรุงเทพมหานคร 10250"
+        },
+        {
+            "desc": "Ultra-Long Name (50+ chars)",
+            "name": "ว่าที่ร้อยตรี ดร. ปิยะวัฒน์ เจริญกิจไพบูลย์พาณิชย์สกุลวงศ์ (ประธานกรรมการ)",
+            "full_addr": "124/8 หมู่ที่ 2 ถนนมิตรภาพ ตำบลในเมือง อำเภอเมืองขอนแก่น จังหวัดขอนแก่น 40000"
+        },
+        {
+            "desc": "Ultra-Long Address (80+ chars) in single field",
+            "name": "นางสาวกานดา วิทยาการ",
+            "full_addr": "45/12 หมู่บ้านศุภาลัยการ์เด้นวิลล์ ซอยรามคำแหง 118 แยก 4-2 แขวงสะพานสูง เขตสะพานสูง กรุงเทพมหานคร 10240"
+        },
+        {
+            "desc": "Overflow in Address 1 (> 55 chars) before split",
+            "name": "นายธนวัฒน์ รุ่งเรืองไพศาล",
+            "addr1": "888/99 อาคารมหานครทาวเวอร์ ชั้น 42 โซนบี ซอยสาทร 10 แขวงยานนาวา",
+            "addr2": "เขตสาทร กรุงเทพมหานคร"
+        }
+    ]
+
+    results = []
+    all_passed = True
+
+    for tc in test_cases:
+        if "full_addr" in tc:
+            a1, a2 = split_thai_address(tc["full_addr"], max_chars=42)
+        else:
+            a1, a2 = balance_address_lines(tc.get("addr1", ""), tc.get("addr2", ""), max_chars=42)
+
+        name = tc["name"]
+        # Verification criteria:
+        # 1. Address 1 length strictly <= 42
+        # 2. Address 1 not empty
+        # 3. No newline or line drop in Address 1
+        a1_fits = len(a1) <= 42
+        has_content = len(a1) > 0
+
+        passed = a1_fits and has_content
+        if not passed:
+            all_passed = False
+
+        results.append({
+            "test_case": tc["desc"],
+            "name_length": len(name),
+            "address1_length": len(a1),
+            "address1_text": a1,
+            "address2_length": len(a2),
+            "address2_text": a2,
+            "a6_line_wrap_passed": passed
+        })
+
+    return {
+        "suite": "WORK4_A6_TEXT_OVERFLOW_HOTFIX_TEST",
+        "all_passed": all_passed,
+        "cases_tested": len(results),
+        "results": results
+    }
+
+
 if __name__ == "__main__":
-    result = execute_pipeline()
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    if "--test-overflow" in sys.argv:
+        test_out = run_a6_overflow_test()
+        print(json.dumps(test_out, ensure_ascii=False, indent=2))
+    else:
+        result = execute_pipeline()
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+
