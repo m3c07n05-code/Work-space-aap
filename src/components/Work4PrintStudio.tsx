@@ -30,6 +30,7 @@ import {
   Work4PrintResponse
 } from '../types';
 import { work4Service, generateUUID, DEFAULT_OFFLINE_MOCK_DATA } from '../services/work4Service';
+import { backendGateway } from '../services/backendGateway';
 
 interface Work4PrintStudioProps {
   onBack?: () => void;
@@ -121,13 +122,6 @@ export const Work4PrintStudio: React.FC<Work4PrintStudioProps> = ({
   const handlePrint = async (cat: Work4Category) => {
     if (isPrinting) return; // Debounce guard
 
-    // 1. Printer Readiness Check
-    if (!data.printer_status.is_ready && data.mode === 'OFFLINE_MOCK') {
-      setPrintErrorNotice(`ระบบระงับการสั่งพิมพ์: ${data.printer_status.message}`);
-      setTimeout(() => setPrintErrorNotice(null), 6000);
-      return;
-    }
-
     setIsPrinting(true);
     setPrintErrorNotice(null);
     setPrintSuccessNotice(null);
@@ -138,30 +132,51 @@ export const Work4PrintStudio: React.FC<Work4PrintStudioProps> = ({
     setLastIdempotencyKey(idempotencyKey);
 
     try {
-      const res = await work4Service.sendPrint({
+      // 1. Dispatch print job to Gateway Queue (status: PENDING)
+      const gatewayRes = await backendGateway.dispatchAction('WORK4_QUEUE_PRINT_JOB', {
         job_id: jobId,
         idempotency_key: idempotencyKey,
         category_code: cat.code,
-        confirmed_by_owner: true
+        category_name: cat.name,
+        year: selectedYear,
+        month: selectedMonth,
+        pdf_pages: cat.pdf_pages,
+        record_count: cat.record_count,
+        status: 'PENDING',
       });
+
+      // 2. Also invoke local print service if printer is ready in CMS2_LIVE mode
+      let localRes: Work4PrintResponse | null = null;
+      if (data.mode === 'CMS2_LIVE' && data.printer_status.is_ready) {
+        localRes = await work4Service.sendPrint({
+          job_id: jobId,
+          idempotency_key: idempotencyKey,
+          category_code: cat.code,
+          confirmed_by_owner: true,
+        });
+      }
+
+      const jobStatus = localRes?.status === 'QUEUED' ? 'QUEUED' : 'PENDING';
 
       // Append to Job History
       setJobHistory(prev => [
         {
-          job_id: res.job_id,
+          job_id: jobId,
           idempotency_key: idempotencyKey,
           category: `${cat.code}: ${cat.name}`,
-          status: res.status,
+          status: jobStatus,
           time: new Date().toLocaleTimeString('th-TH'),
-          message: res.message || ''
+          message: localRes?.message || 'ส่งคำสั่งพิมพ์เข้าคิว Gateway (PENDING) เรียบร้อยแล้ว'
         },
         ...prev.slice(0, 9)
       ]);
 
-      if (res.status === 'BLOCKED_CMS2_OFFLINE') {
-        setPrintErrorNotice(`ความปลอดภัย: ${res.message} (Idempotency Key: ${idempotencyKey.substring(0, 8)}...)`);
-      } else if (res.status === 'QUEUED') {
-        setPrintSuccessNotice(`สำเร็จ! ส่งงาน ${jobId} เข้า Spooler Windows บน CMS-2 เรียบร้อย (จำนวน ${cat.pdf_pages} แผ่น A6)`);
+      if (gatewayRes.success) {
+        setPrintSuccessNotice(
+          `สำเร็จ! ส่งงาน ${jobId} เข้าคิว Gateway (สถานะ PENDING) เรียบร้อย (จำนวน ${cat.pdf_pages} แผ่น A6)`
+        );
+      } else {
+        setPrintErrorNotice(`Gateway ตอบกลับแต่ไม่สำเร็จ (${gatewayRes.log.status})`);
       }
     } catch (err: any) {
       setPrintErrorNotice(`เกิดข้อผิดพลาดในการสั่งพิมพ์: ${err?.message || 'Network error'}`);
@@ -664,17 +679,17 @@ export const Work4PrintStudio: React.FC<Work4PrintStudioProps> = ({
             {/* Primary Button 2: Dedicated Windows Print Button with Debounce Guard & Mode Gate */}
             <button
               onClick={() => handlePrint(selectedCategory)}
-              disabled={isPrinting || (data.mode === 'OFFLINE_MOCK' && !data.printer_status.is_ready)}
+              disabled={isPrinting}
               className={`w-full sm:flex-1 py-3.5 px-5 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-md ${
-                data.mode === 'OFFLINE_MOCK'
-                  ? 'bg-slate-200 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-300 dark:border-slate-700 cursor-not-allowed opacity-80'
-                  : isPrinting
+                isPrinting
                   ? 'bg-emerald-600/70 text-white cursor-wait'
+                  : data.mode === 'OFFLINE_MOCK'
+                  ? 'bg-blue-600 hover:bg-blue-700 text-white cursor-pointer shadow-blue-500/20 hover:scale-[1.01]'
                   : 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer shadow-emerald-500/20 hover:scale-[1.01]'
               }`}
               title={
                 data.mode === 'OFFLINE_MOCK'
-                  ? 'ปุ่มถูกล็อก: เครื่อง CMS-2 ออฟไลน์ ไม่สามารถส่งคำสั่งพิมพ์จริงได้'
+                  ? 'ส่งคำสั่งพิมพ์เข้าคิว Gateway (สถานะ PENDING)'
                   : 'สั่งพิมพ์เอกสาร A6 ออกเครื่องพิมพ์ Windows บน CMS-2'
               }
             >
@@ -685,8 +700,8 @@ export const Work4PrintStudio: React.FC<Work4PrintStudioProps> = ({
                 </>
               ) : data.mode === 'OFFLINE_MOCK' ? (
                 <>
-                  <Lock className="w-4 h-4 text-amber-500" />
-                  <span>ล็อกปุ่มสั่งพิมพ์จริง (CMS-2 ออฟไลน์)</span>
+                  <Printer className="w-4 h-4 text-blue-200" />
+                  <span>ส่งคำสั่งพิมพ์เข้าคิว Gateway (PENDING)</span>
                 </>
               ) : (
                 <>

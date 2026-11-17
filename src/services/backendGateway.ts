@@ -1,5 +1,5 @@
-import { GatewayConfig, PayloadLog, ScopeItem } from '../types';
-export type { ScopeItem };
+import { GatewayConfig, PayloadLog, ScopeItem, ManifestModule, ProjectManifest } from '../types';
+export type { ScopeItem, ManifestModule, ProjectManifest };
 
 const STORAGE_KEY_CONFIG = 'nexus_gateway_config';
 const STORAGE_KEY_LOGS = 'nexus_gateway_logs';
@@ -49,6 +49,7 @@ export const INITIAL_SCOPES: ScopeItem[] = [
 type GatewayListener = (config: GatewayConfig) => void;
 type LogListener = (logs: PayloadLog[]) => void;
 type ScopeListener = (scopes: ScopeItem[]) => void;
+type ManifestListener = (manifest: ProjectManifest | null) => void;
 export type SyncStatusType = 'syncing' | 'synced';
 export interface SyncState {
   status: SyncStatusType;
@@ -60,6 +61,7 @@ class BackendGatewayService {
   private config: GatewayConfig;
   private logs: PayloadLog[] = [];
   private scopes: ScopeItem[] = [];
+  private lastManifest: ProjectManifest | null = null;
   private syncState: SyncState = {
     status: 'synced',
     updatedAt: new Date().toLocaleTimeString('th-TH'),
@@ -68,6 +70,7 @@ class BackendGatewayService {
   private configListeners: Set<GatewayListener> = new Set();
   private logListeners: Set<LogListener> = new Set();
   private scopeListeners: Set<ScopeListener> = new Set();
+  private manifestListeners: Set<ManifestListener> = new Set();
   private syncListeners: Set<SyncListener> = new Set();
 
   constructor() {
@@ -286,6 +289,24 @@ class BackendGatewayService {
     }
   }
 
+  private notifyManifest() {
+    for (const listener of this.manifestListeners) {
+      listener(this.lastManifest);
+    }
+  }
+
+  public getManifest(): ProjectManifest | null {
+    return this.lastManifest;
+  }
+
+  public onManifestChange(listener: ManifestListener): () => void {
+    this.manifestListeners.add(listener);
+    if (this.lastManifest) {
+      listener(this.lastManifest);
+    }
+    return () => this.manifestListeners.delete(listener);
+  }
+
   public async testConnection(): Promise<{ success: boolean; latencyMs: number; status: number; message: string }> {
     this.setSyncStatus('syncing');
     this.updateConfig({ status: 'testing' });
@@ -312,30 +333,41 @@ class BackendGatewayService {
       const isGas = this.config.baseUrl.includes('script.google.com');
 
       if (isGas) {
-        await fetch(this.config.baseUrl, {
+        // Direct POST with text/plain to bypass OPTIONS preflight on Google Apps Script
+        const res = await fetch(this.config.baseUrl, {
           method: 'POST',
-          mode: 'no-cors',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           body: JSON.stringify({
-            action: 'PING_HEALTH_CHECK',
+            action: 'PING',
             source: 'NexusLedger_UI',
             timestamp: new Date().toISOString(),
           }),
         });
 
         const latencyMs = Math.max(16, Math.round(performance.now() - startTime));
+        const rawText = await res.text();
+        let data: any = {};
+        try {
+          data = rawText ? JSON.parse(rawText) : {};
+        } catch {
+          data = { raw: rawText };
+        }
+
+        const isSuccess = res.ok && Boolean(data.success);
         this.updateConfig({
-          status: 'connected',
+          status: isSuccess ? 'connected' : 'offline',
           latencyMs,
           lastPing: new Date().toLocaleTimeString('th-TH'),
         });
         this.setSyncStatus('synced');
 
         return {
-          success: true,
+          success: isSuccess,
           latencyMs,
-          status: 200,
-          message: 'เชื่อมต่อ Google Apps Script Web App สำเร็จ พร้อมส่งคำสั่ง',
+          status: res.status,
+          message: isSuccess
+            ? 'เชื่อมต่อ Google Apps Script Web App สำเร็จ พร้อมส่งคำสั่ง'
+            : `เซิร์ฟเวอร์ตอบกลับแต่ไม่สำเร็จ (${res.status})`,
         };
       }
 
@@ -378,6 +410,102 @@ class BackendGatewayService {
     }
   }
 
+  public async readManifest(overrideEndpoint?: string): Promise<{
+    success: boolean;
+    manifest: ProjectManifest | null;
+    error?: string;
+  }> {
+    this.setSyncStatus('syncing');
+    const endpoint = overrideEndpoint || this.config.baseUrl;
+    const isGas = endpoint.includes('script.google.com');
+    const startTime = performance.now();
+    const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const timestamp = new Date().toLocaleTimeString('th-TH');
+
+    try {
+      let url = endpoint;
+      if (isGas) {
+        const separator = url.includes('?') ? '&' : '?';
+        url = `${url}${separator}action=GET_MANIFEST`;
+      }
+
+      const response = await fetch(url, {
+        method: 'GET',
+      });
+
+      const latencyMs = Math.max(16, Math.round(performance.now() - startTime));
+      const rawText = await response.text();
+      let data: any = {};
+      try {
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch {
+        data = { raw: rawText };
+      }
+
+      const isSuccess = response.ok && Boolean(data.success);
+      const manifest: ProjectManifest | null = (data && data.manifest) ? data.manifest : null;
+
+      if (manifest) {
+        this.lastManifest = manifest;
+        this.notifyManifest();
+      }
+
+      const log: PayloadLog = {
+        id: logId,
+        timestamp,
+        action: 'GET_MANIFEST',
+        method: 'GET',
+        endpoint: url,
+        headers: {},
+        payload: { action: 'GET_MANIFEST' },
+        status: response.status,
+        latencyMs,
+        response: data,
+        isSimulated: false,
+      };
+
+      this.logs = [log, ...this.logs.slice(0, 49)];
+      this.notifyLogs();
+      this.updateConfig({ latencyMs, lastPing: timestamp, status: isSuccess ? 'connected' : 'offline' });
+      this.setSyncStatus('synced');
+
+      return {
+        success: isSuccess,
+        manifest,
+        error: isSuccess ? undefined : (data.error || 'Failed to read manifest'),
+      };
+    } catch (err: unknown) {
+      const latencyMs = Math.round(performance.now() - startTime);
+      this.updateConfig({ latencyMs, lastPing: timestamp, status: 'offline' });
+      this.setSyncStatus('synced');
+
+      const errorLog: PayloadLog = {
+        id: logId,
+        timestamp,
+        action: 'GET_MANIFEST',
+        method: 'GET',
+        endpoint: overrideEndpoint || this.config.baseUrl,
+        headers: {},
+        payload: { action: 'GET_MANIFEST' },
+        status: 504,
+        latencyMs,
+        response: {
+          error: err instanceof Error ? err.message : 'Network failure fetching manifest',
+        },
+        isSimulated: false,
+      };
+
+      this.logs = [errorLog, ...this.logs.slice(0, 49)];
+      this.notifyLogs();
+
+      return {
+        success: false,
+        manifest: null,
+        error: err instanceof Error ? err.message : 'Network failure',
+      };
+    }
+  }
+
   public async dispatchAction(
     action: string,
     payload: Record<string, unknown>,
@@ -397,10 +525,9 @@ class BackendGatewayService {
       ...payload,
     };
 
+    // Use simple text/plain header without custom headers to avoid CORS OPTIONS preflight
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'X-Nexus-Action': action,
-      'X-Target-Manifest': MANIFEST_FILE_NAME,
+      'Content-Type': 'text/plain;charset=utf-8',
     };
 
     const isGas = endpoint.includes('script.google.com');
@@ -410,6 +537,7 @@ class BackendGatewayService {
       const latencyMs = Math.round(performance.now() - startTime);
 
       const simResponse: Record<string, unknown> = {
+        success: true,
         status: 'PASS',
         manifestUpdated: true,
         eventId: `evt_${Math.random().toString(36).substring(2, 8)}`,
@@ -441,14 +569,28 @@ class BackendGatewayService {
 
     try {
       if (isGas) {
-        await fetch(endpoint, {
+        const response = await fetch(endpoint, {
           method: 'POST',
-          mode: 'no-cors',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          headers,
           body: JSON.stringify(payloadEnvelope),
         });
 
         const latencyMs = Math.max(16, Math.round(performance.now() - startTime));
+        const rawText = await response.text();
+
+        let responseBody: Record<string, unknown> = {};
+        try {
+          responseBody = rawText ? JSON.parse(rawText) : {};
+        } catch {
+          responseBody = { raw: rawText };
+        }
+
+        const isSuccess = response.ok && Boolean(responseBody.success);
+
+        if (responseBody.manifest && typeof responseBody.manifest === 'object') {
+          this.lastManifest = responseBody.manifest as ProjectManifest;
+          this.notifyManifest();
+        }
 
         const gasLog: PayloadLog = {
           id: logId,
@@ -456,27 +598,22 @@ class BackendGatewayService {
           action,
           method: 'POST',
           endpoint,
-          headers: { ...headers, 'Mode': 'no-cors' },
+          headers,
           payload: payloadEnvelope,
-          status: 200,
+          status: response.status,
           latencyMs,
-          response: {
-            status: 'DISPATCHED_TO_GOOGLE_APPS_SCRIPT',
-            manifestUpdated: true,
-            folder: `AI_Project_Workspace (${WORKSPACE_FOLDER_ID})`,
-            manifest: MANIFEST_FILE_NAME,
-            mode: 'Realtime Apps Script Delivery',
-          },
+          response: responseBody,
           isSimulated: false,
         };
 
         this.logs = [gasLog, ...this.logs.slice(0, 49)];
         this.notifyLogs();
-        this.updateConfig({ latencyMs, lastPing: timestamp, status: 'connected' });
+        this.updateConfig({ latencyMs, lastPing: timestamp, status: isSuccess ? 'connected' : 'offline' });
         this.setSyncStatus('synced');
-        return { success: true, log: gasLog };
+        return { success: isSuccess, log: gasLog };
       }
 
+      // Non-GAS endpoint fallback
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
@@ -487,12 +624,15 @@ class BackendGatewayService {
       });
 
       const latencyMs = Math.round(performance.now() - startTime);
+      const rawText = await response.text();
       let responseBody: Record<string, unknown> = {};
       try {
-        responseBody = await response.json();
+        responseBody = rawText ? JSON.parse(rawText) : {};
       } catch {
-        responseBody = { raw: await response.text() };
+        responseBody = { raw: rawText };
       }
+
+      const isSuccess = response.ok && (responseBody.success === undefined || Boolean(responseBody.success));
 
       const standardLog: PayloadLog = {
         id: logId,
@@ -512,7 +652,7 @@ class BackendGatewayService {
       this.notifyLogs();
       this.updateConfig({ latencyMs, lastPing: timestamp });
       this.setSyncStatus('synced');
-      return { success: response.ok, log: standardLog };
+      return { success: isSuccess, log: standardLog };
     } catch (err: unknown) {
       const latencyMs = Math.round(performance.now() - startTime);
       const errorLog: PayloadLog = {
@@ -527,14 +667,13 @@ class BackendGatewayService {
         latencyMs,
         response: {
           error: err instanceof Error ? err.message : 'Network failure',
-          suggestion: 'ยิงคำสั่งเข้า Google Apps Script ในโหมด no-cors',
         },
         isSimulated: false,
       };
 
       this.logs = [errorLog, ...this.logs.slice(0, 49)];
       this.notifyLogs();
-      this.updateConfig({ latencyMs, lastPing: timestamp });
+      this.updateConfig({ latencyMs, lastPing: timestamp, status: 'offline' });
       this.setSyncStatus('synced');
       return { success: false, log: errorLog };
     }
@@ -547,3 +686,4 @@ class BackendGatewayService {
 }
 
 export const backendGateway = new BackendGatewayService();
+

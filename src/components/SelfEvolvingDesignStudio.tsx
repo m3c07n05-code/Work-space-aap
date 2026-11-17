@@ -55,6 +55,7 @@ export const SelfEvolvingDesignStudio: React.FC<SelfEvolvingDesignStudioProps> =
   const [isScanningCode, setIsScanningCode] = useState(false);
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   const [savedToDrive, setSavedToDrive] = useState(false);
+  const [isSavingToDrive, setIsSavingToDrive] = useState(false);
   const [pinnedToApp, setPinnedToApp] = useState(false);
   const [previewActionToast, setPreviewActionToast] = useState<string | null>(null);
 
@@ -160,16 +161,43 @@ export const SelfEvolvingDesignStudio: React.FC<SelfEvolvingDesignStudioProps> =
   };
 
   const handleSaveToDrive = async () => {
-    if (!designResult) return;
-    setSavedToDrive(true);
-    await backendGateway.dispatchAction('DEPLOY_EVOLVED_UI_DESIGN', {
-      componentId: designResult.componentId,
-      title: designResult.title,
-      category: designResult.category,
-      gate: designResult.gate,
-      manifestTarget: '00_Project_Manifest.json',
-    });
-    setTimeout(() => setSavedToDrive(false), 5000);
+    if (!designResult || isSavingToDrive) return;
+    setIsSavingToDrive(true);
+    try {
+      const res = await backendGateway.dispatchAction('DEPLOY_EVOLVED_UI_DESIGN', {
+        componentId: designResult.componentId,
+        title: designResult.title,
+        category: designResult.category,
+        gate: designResult.gate,
+        summary: designResult.summary,
+        rule: designResult.rule,
+        actionPrompt: designResult.actionPrompt,
+        uiPreviewData: designResult.uiPreviewData,
+        manifestTarget: '00_Project_Manifest.json',
+        spec: {
+          componentId: designResult.componentId,
+          title: designResult.title,
+          category: designResult.category,
+          gate: designResult.gate,
+          summary: designResult.summary,
+          rule: designResult.rule,
+          actionPrompt: designResult.actionPrompt,
+          uiPreviewData: designResult.uiPreviewData,
+        },
+      });
+
+      if (res.success && res.log.response?.manifestUpdated === true) {
+        setSavedToDrive(true);
+        setTimeout(() => setSavedToDrive(false), 5000);
+      } else {
+        setSavedToDrive(false);
+      }
+    } catch (err) {
+      console.error('Failed to save spec to Drive:', err);
+      setSavedToDrive(false);
+    } finally {
+      setIsSavingToDrive(false);
+    }
   };
 
   const handlePinToApp = () => {
@@ -467,13 +495,18 @@ export const SelfEvolvingDesignStudio: React.FC<SelfEvolvingDesignStudioProps> =
             <LiquidButton
               size="default"
               onClick={handleSaveToDrive}
-              disabled={savedToDrive}
+              disabled={savedToDrive || isSavingToDrive}
               className="text-xs font-bold shadow-md cursor-pointer"
             >
               {savedToDrive ? (
                 <>
                   <Check className="w-4 h-4 text-emerald-600" />
                   <span>บันทึกลง Manifest บน Drive เรียบร้อย</span>
+                </>
+              ) : isSavingToDrive ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin text-blue-600" />
+                  <span>กำลังบันทึกลง Drive...</span>
                 </>
               ) : (
                 <>

@@ -21,7 +21,7 @@ import { LiquidNavbar, NimbusIcons, LiquidNavItem } from './components/ui/liquid
 import { Work4PrintStudio } from './components/Work4PrintStudio';
 
 import { backendGateway } from './services/backendGateway';
-import { GatewayConfig } from './types';
+import { GatewayConfig, ManifestModule } from './types';
 import { Terminal, ArrowLeft } from 'lucide-react';
 
 export type ActiveTabType = 'overview' | 'work4' | 'scope-builder' | 'ai-studio' | 'stop-gates' | 'gascode' | 'proposed-work';
@@ -37,8 +37,18 @@ export default function App() {
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [logCount, setLogCount] = useState(backendGateway.getLogs().length);
   const [scopesCount, setScopesCount] = useState(backendGateway.getScopes().length);
+  const [manifestModules, setManifestModules] = useState<ManifestModule[]>(
+    backendGateway.getManifest()?.modules || []
+  );
 
   useEffect(() => {
+    // Fetch live modules from 00_Project_Manifest.json via backendGateway
+    backendGateway.readManifest().then((res) => {
+      if (res.success && res.manifest?.modules) {
+        setManifestModules(res.manifest.modules);
+      }
+    });
+
     const unsubConfig = backendGateway.onConfigChange((newConfig) => {
       setConfig(newConfig);
     });
@@ -48,10 +58,16 @@ export default function App() {
     const unsubScopes = backendGateway.onScopeChange((scopes) => {
       setScopesCount(scopes.length);
     });
+    const unsubManifest = backendGateway.onManifestChange((manifest) => {
+      if (manifest?.modules) {
+        setManifestModules(manifest.modules);
+      }
+    });
     return () => {
       unsubConfig();
       unsubLogs();
       unsubScopes();
+      unsubManifest();
     };
   }, []);
 
@@ -233,12 +249,13 @@ export default function App() {
               ? 'bg-white/95 hover:bg-slate-50 border-blue-200 text-[#14243A]'
               : 'bg-[#0e1626]/95 hover:bg-slate-800 border-teal-500/40 text-slate-200'
           }`}
+          title={`ดูประวัติการส่งคำสั่งและโมดูลจริงจาก 00_Project_Manifest.json (${manifestModules.length} Modules)`}
         >
           <Terminal className="w-4 h-4 text-blue-600 dark:text-teal-400" />
           <span className="font-semibold">Live Payloads</span>
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
           <span className="px-1.5 py-0.5 rounded-md bg-blue-50 dark:bg-slate-800 text-blue-700 dark:text-teal-300 font-mono text-[11px] font-bold">
-            {logCount}
+            {manifestModules.length > 0 ? manifestModules.length : logCount}
           </span>
         </button>
       </div>
@@ -275,6 +292,7 @@ export default function App() {
       <PayloadLogsModal
         isOpen={isLogsModalOpen}
         onClose={() => setIsLogsModalOpen(false)}
+        manifestModules={manifestModules}
       />
 
       <ExportCodeModal

@@ -98,3 +98,38 @@ export interface Work4PrintResponse {
   message?: string;
 }
 
+export interface ManifestModule {
+  componentId: string;
+  title?: string;
+  name?: string;
+  category?: string;
+  summary?: string;
+  description?: string;
+  gate?: string;
+  rule?: string;
+  prompt?: string;
+  actionPrompt?: string;
+  status?: string;
+  result?: string;
+  syncedAt?: string;
+  updatedAtIso?: string;
+  eventId?: string;
+  uiPreviewData?: Record<string, unknown>;
+}
+
+export interface ProjectManifest {
+  projectName?: string;
+  project?: string;
+  lastUpdated?: string;
+  updatedAt?: string;
+  currentStatus?: string;
+  modules: ManifestModule[];
+  history_logs?: string[];
+  devices?: Record<string, unknown>;
+  scopes?: any[];
+  gateLogs?: any[];
+  lastPingIso?: string;
+  lastEventId?: string;
+}
+
+
