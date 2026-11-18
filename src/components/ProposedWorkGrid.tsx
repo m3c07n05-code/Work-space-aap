@@ -44,6 +44,10 @@ export const ProposedWorkGrid: React.FC<ProposedWorkGridProps> = ({ onSelectWork
   ];
 
   const handleActionClick = (id: string, title: string, isProposed: boolean) => {
+    if (id === 'WORK 1' && onSelectWork) {
+      onSelectWork('work1');
+      return;
+    }
     if (id === 'WORK 4' && onSelectWork) {
       onSelectWork('work4');
       return;

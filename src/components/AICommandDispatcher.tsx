@@ -49,6 +49,10 @@ export const AICommandDispatcher: React.FC<AICommandDispatcherProps> = ({ onOpen
         body: JSON.stringify({ prompt: textToSend.trim() }),
       });
 
+      const contentType = response.headers.get('content-type') || '';
+      if (!response.ok || !contentType.includes('application/json')) {
+        throw new Error('Static fallback mode');
+      }
       const data = await response.json();
       if (data.success && data.result) {
         setAiResult(data.result);
