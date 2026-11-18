@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     CRD Automated Split Monthly Follow-up & Payment History Integration (Follower 077)
     Enforces Day 20 Cut-off Rule & Zero-PII Compliance.
@@ -32,15 +32,8 @@ param(
     [switch]$DryRun
 )
 
-# Auto-redirect to 32-bit PowerShell for Microsoft Excel COM if running under 64-bit
-if ([IntPtr]::Size -eq 8) {
-    $sysWow64 = "$env:SystemRoot\SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
-    if (Test-Path $sysWow64) {
-        Write-Host "[INIT] Switching to 32-bit PowerShell (SysWOW64) for Excel COM..." -ForegroundColor Yellow
-        & $sysWow64 -NoProfile -ExecutionPolicy Bypass -File $MyInvocation.MyCommand.Path @PSBoundParameters
-        exit $LASTEXITCODE
-    }
-}
+# Check Excel COM architecture compatibility
+# Excel 2016+ on CMS-2 is 64-bit; run in current bitness without forcing 32-bit redirect.
 
 $ErrorActionPreference = "Stop"
 $Months = @(
@@ -69,6 +62,7 @@ function New-ExcelApp {
     $excel.DisplayAlerts = $false
     $excel.ScreenUpdating = $false
     $excel.AskToUpdateLinks = $false
+    $excel.AutomationSecurity = 3 # msoAutomationSecurityForceDisable (prevents hanging on macros)
     return $excel
 }
 
@@ -283,26 +277,30 @@ try {
         $maxDbRow = $usedDb.Row + $usedDb.Rows.Count - 1
         Write-Host "Loaded DB Sheet '$($dbWs.Name)' with $maxDbRow rows." -ForegroundColor Gray
 
-        # Scan DB rows (Read memory buffer)
-        for ($r = 3; $r -le $maxDbRow; $r++) {
-            $contract = [string]$dbWs.Cells.Item($r, 2).Value2
-            $mem = [string]$dbWs.Cells.Item($r, 6).Value2
-            $payDateVal = $dbWs.Cells.Item($r, 11).Value2 # Pay_Last_Date / Detial_Date
-            $amount = $dbWs.Cells.Item($r, 16).Value2     # ชำระงวดละ / AMT
-            $status = [string]$dbWs.Cells.Item($r, 22).Value2 # Late_Status
+        # Fast bulk read into memory (1 COM call instead of 250,000 cell calls)
+        if ($maxDbRow -ge 3) {
+            $rawDbData = $dbWs.Range("A3", $dbWs.Cells.Item($maxDbRow, 22)).Value2
+            $rowCountInBlock = $maxDbRow - 2
+            for ($i = 1; $i -le $rowCountInBlock; $i++) {
+                $contract = [string]$rawDbData[$i, 2]
+                $mem = [string]$rawDbData[$i, 6]
+                $payDateVal = $rawDbData[$i, 11] # Pay_Last_Date / Detial_Date
+                $amount = $rawDbData[$i, 16]     # ชำระงวดละ / AMT
+                $status = [string]$rawDbData[$i, 22] # Late_Status
 
-            if ($contract -or $mem) {
-                $key = if ($contract) { $contract.Trim() } else { $mem.Trim().PadLeft(5, '0') }
-                if (-not $PaymentDict.ContainsKey($key)) {
-                    $PaymentDict[$key] = New-Object System.Collections.Generic.List[object]
+                if ($contract -or $mem) {
+                    $key = if ($contract) { $contract.Trim() } else { $mem.Trim().PadLeft(5, '0') }
+                    if (-not $PaymentDict.ContainsKey($key)) {
+                        $PaymentDict[$key] = New-Object System.Collections.Generic.List[object]
+                    }
+                    $PaymentDict[$key].Add([PSCustomObject]@{
+                        Contract = $contract
+                        MemID = $mem
+                        DateVal = $payDateVal
+                        Amount = $amount
+                        Status = $status
+                    })
                 }
-                $PaymentDict[$key].Add([PSCustomObject]@{
-                    Contract = $contract
-                    MemID = $mem
-                    DateVal = $payDateVal
-                    Amount = $amount
-                    Status = $status
-                })
             }
         }
 

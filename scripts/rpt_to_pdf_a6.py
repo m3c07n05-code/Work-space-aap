@@ -113,14 +113,14 @@ def execute_pipeline(year="2026", month="11", output_dir=None):
     Executes the 9-category scan and PDF generation.
     Returns return contract payload.
     """
-    if not output_dir:
-        # Check if running on Windows CMS-2 or Linux container
-        if sys.platform == "win32":
+    if sys.platform == "win32":
+        source_dir = r"D:\COOP\VIEWREPORT\หนังสือบอกกล่าวการชำระหนี้_CLT"
+        if not output_dir:
             output_dir = r"D:\OneDrive\2026\ระบบจดหมาย\2-4-5 งวด"
-            source_dir = r"D:\COOP\VIEWREPORT\หนังสือบอกกล่าวการชำระหนี้_CLT"
-        else:
+    else:
+        source_dir = r"D:\COOP\VIEWREPORT\หนังสือบอกกล่าวการชำระหนี้_CLT (Simulated on Cloud)"
+        if not output_dir:
             output_dir = os.path.join(os.getcwd(), "output", "OneDrive_2026", "ระบบจดหมาย", "2-4-5 งวด")
-            source_dir = r"D:\COOP\VIEWREPORT\หนังสือบอกกล่าวการชำระหนี้_CLT (Simulated on Cloud)"
 
     os.makedirs(output_dir, exist_ok=True)
 

@@ -14,11 +14,15 @@ Write-Host "--- Registering CRD 10-Minute Inbox Watcher on CMS-2 ---" -Foregroun
 Write-Host "Task Name: $TaskName"
 Write-Host "Target Script: $PythonScript"
 
-# Action: Run pythonw.exe (windowless) with script path
-$Action = New-ScheduledTaskAction -Execute "pythonw.exe" -Argument "`"$PythonScript`" --once" -WorkingDirectory $ScriptDir
+# Action: Run real pythonw.exe (windowless) with full path
+$RealPythonw = "C:\Users\Natee.yan\AppData\Local\Python\pythoncore-3.14-64\pythonw.exe"
+if (-not (Test-Path $RealPythonw)) {
+    $RealPythonw = (Get-Command pythonw.exe -ErrorAction SilentlyContinue).Source
+}
+$Action = New-ScheduledTaskAction -Execute $RealPythonw -Argument "`"$PythonScript`" --once" -WorkingDirectory $ScriptDir
 
 # Trigger: Repeat every 10 minutes indefinitely
-$Trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 10) -RepetitionDuration ([TimeSpan]::MaxValue)
+$Trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 10)
 
 # Settings: Allow on battery, start when available, restart on failure
 $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)

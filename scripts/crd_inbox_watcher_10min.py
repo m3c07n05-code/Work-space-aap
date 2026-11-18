@@ -72,16 +72,44 @@ def release_lock():
 
 def fetch_doc_content() -> str:
     """Reads latest document text via gdocs CLI."""
-    cmd = ["gdocs", "readonly", "read", DOC_ID, "--comments=false"]
+    native_exe = os.path.expanduser(r"~\.gemini\antigravity\plugin_data\gdocs\bin\gdocs-986250228.exe")
+    permanent_cmd = os.path.expanduser(r"~\.gemini\config\plugins\gdocs\skills\gdocs\scripts\gdocs.cmd")
+    
+    use_shell = False
+    if sys.platform == "win32" and os.path.exists(native_exe):
+        bin_name = native_exe
+    elif sys.platform == "win32" and os.path.exists(permanent_cmd):
+        bin_name = permanent_cmd
+        use_shell = True
+    else:
+        bin_name = "gdocs.cmd" if sys.platform == "win32" else "gdocs"
+        use_shell = (sys.platform == "win32")
+        
+    cmd = [bin_name, "readonly", "read", DOC_ID, "--comments=false"]
+    custom_env = os.environ.copy()
+    app_data_dir = os.path.expanduser(r"~\.gemini\antigravity")
+    if "ANTIGRAVITY_APP_DATA_DIR" not in custom_env and os.path.exists(app_data_dir):
+        custom_env["ANTIGRAVITY_APP_DATA_DIR"] = app_data_dir
+
     try:
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=45)
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=45,
+            shell=use_shell,
+            env=custom_env
+        )
         if proc.returncode == 0:
+            if not proc.stdout:
+                log_msg(f"gdocs read succeeded (code 0) but stdout was empty. stderr: {proc.stderr[:150]}")
             return proc.stdout
         else:
-            log_msg(f"Warning: gdocs read returned non-zero code {proc.returncode}: {proc.stderr[:120]}")
+            log_msg(f"Warning: gdocs read returned non-zero code {proc.returncode}: {proc.stderr[:200]}")
             return ""
     except Exception as e:
-        log_msg(f"Error executing gdocs read: {e}")
+        log_msg(f"Error executing gdocs read ({type(e).__name__}): {e}")
         return ""
 
 
