@@ -76,16 +76,16 @@ def fetch_doc_content() -> str:
     permanent_cmd = os.path.expanduser(r"~\.gemini\config\plugins\gdocs\skills\gdocs\scripts\gdocs.cmd")
     
     use_shell = False
-    if sys.platform == "win32" and os.path.exists(native_exe):
-        bin_name = native_exe
-    elif sys.platform == "win32" and os.path.exists(permanent_cmd):
+    if sys.platform == "win32" and os.path.exists(permanent_cmd):
         bin_name = permanent_cmd
         use_shell = True
+    elif sys.platform == "win32" and os.path.exists(native_exe):
+        bin_name = native_exe
     else:
         bin_name = "gdocs.cmd" if sys.platform == "win32" else "gdocs"
         use_shell = (sys.platform == "win32")
         
-    cmd = [bin_name, "readonly", "read", DOC_ID, "--comments=false"]
+    cmd = [bin_name, "readonly", "read", DOC_ID]
     custom_env = os.environ.copy()
     app_data_dir = os.path.expanduser(r"~\.gemini\antigravity")
     if "ANTIGRAVITY_APP_DATA_DIR" not in custom_env and os.path.exists(app_data_dir):
@@ -97,6 +97,8 @@ def fetch_doc_content() -> str:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=45,
             shell=use_shell,
             env=custom_env,
@@ -116,22 +118,25 @@ def fetch_doc_content() -> str:
 
 def parse_ready_tasks(content: str):
     """
-    Scans for commands with status READY FOR AGENT EXECUTION.
+    Scans for active dispatch blocks (READY FOR AGENT EXECUTION / EXECUTE IMMEDIATELY / EXECUTE ALL STAGES / EXECUTE DIRECTLY).
     Returns structured list of pending tasks.
     """
     tasks = []
-    blocks = re.split(r'\n(?=\\?\[[A-Z0-9_\-\s\|]+)', content)
+    blocks = re.split(r'\n(?=##\s+|\s*\\?\[[A-Z0-9_\-\s\|]+)', content)
     for b in blocks:
-        if "READY FOR AGENT EXECUTION" in b:
+        if "EXECUTION REPORT" in b[:200] or "PERMANENT SYSTEM GUARDRAILS" in b[:200]:
+            continue
+        if re.search(r'(READY FOR AGENT EXECUTION|EXECUTE IMMEDIATELY|EXECUTE ALL STAGES|EXECUTE DIRECTLY|ACTIVE TASK)', b, re.IGNORECASE):
+            if re.search(r'STATUS\s*:\s*(COMPLETED|DONE|PAUSED|BLOCKED|CANCELLED)', b, re.IGNORECASE):
+                continue
             task_id_m = re.search(r'TASK\\?_ID:\s*([A-Za-z0-9_\-]+)', b)
-            task_id = task_id_m.group(1).replace('\\', '') if task_id_m else "UNKNOWN_TASK_ID"
+            task_id = task_id_m.group(1).replace('\\', '') if task_id_m else "DOCB-ACTIVE-DISPATCH"
             
-            # Extract header title (supports escaped markdown brackets)
             header_m = re.search(r'\\?\[([A-Z0-9_\-\s\|:—\.\(\)\/]+)\\?\]', b)
             title = header_m.group(1).strip() if header_m else "Task Command"
 
-            status_m = re.search(r'STATUS:\s*([A-Za-z0-9_\-\s\(\)]+)', b)
-            status_val = status_m.group(1).strip() if status_m else "READY FOR AGENT EXECUTION"
+            status_m = re.search(r'STATUS:\s*([^\r\n]+)', b)
+            status_val = status_m.group(1).strip() if status_m else "ACTIVE_DISPATCH"
 
             tasks.append({
                 "task_id": task_id,

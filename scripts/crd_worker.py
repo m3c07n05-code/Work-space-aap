@@ -17,6 +17,8 @@ import json
 import time
 import shutil
 import signal
+import hashlib
+import re
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -285,15 +287,119 @@ def handle_doc_b_dispatch(job: Dict[str, Any], dry_run: bool = False) -> Dict[st
     return {"success": final_status == "DONE", "status": final_status, "jobId": job_id, "summary": summary}
 
 
+def submit_job(job_spec: Dict[str, Any]) -> Dict[str, Any]:
+    """Enqueues a job into GAS Gateway via SUBMIT_JOB."""
+    payload = {"action": "SUBMIT_JOB"}
+    payload.update(job_spec)
+    return gas_post(payload, timeout=15)
+
+
+def fetch_doc_b_top_active_job() -> Optional[Dict[str, Any]]:
+    """
+    Directly reads Google Doc B via gdocs CLI as a local fallback when GAS pollDocBToQueue
+    has not queued a top active dispatch (e.g. unified runbook headings without a literal STATUS: line).
+    """
+    doc_b_id = "1UL_maGIJiMm8N6f0sUIYwAkFsqpHLz4HrZbkQZTZn7Q"
+    permanent_cmd = os.path.expanduser(r"~\.gemini\config\plugins\gdocs\skills\gdocs\scripts\gdocs.cmd")
+    native_exe = os.path.expanduser(r"~\.gemini\antigravity\plugin_data\gdocs\bin\gdocs-986250228.exe")
+
+    use_shell = False
+    if sys.platform == "win32" and os.path.exists(permanent_cmd):
+        bin_name = permanent_cmd
+        use_shell = True
+    elif sys.platform == "win32" and os.path.exists(native_exe):
+        bin_name = native_exe
+    else:
+        return None
+
+    custom_env = os.environ.copy()
+    app_data_dir = os.path.expanduser(r"~\.gemini\antigravity")
+    if "ANTIGRAVITY_APP_DATA_DIR" not in custom_env and os.path.exists(app_data_dir):
+        custom_env["ANTIGRAVITY_APP_DATA_DIR"] = app_data_dir
+
+    try:
+        proc = subprocess.run(
+            [bin_name, "readonly", "read", doc_b_id],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            shell=use_shell,
+            env=custom_env,
+            creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+        )
+        if proc.returncode != 0 or not proc.stdout:
+            return None
+        content = proc.stdout.strip()
+    except Exception:
+        return None
+
+    top_block = re.split(r'\n---\s*\n', content)[0].strip()
+    if not top_block:
+        return None
+
+    first_line = top_block.split("\n")[0].strip()
+    if "EXECUTION REPORT" in first_line.upper() or "PERMANENT SYSTEM" in first_line.upper():
+        return None
+
+    status_m = re.search(r'STATUS\s*:\s*([^\r\n]+)', top_block, re.IGNORECASE)
+    if status_m and re.search(r'\b(PAUSED|COMPLETED|DONE|BLOCKED|CANCELLED|HOLD|SKIPPED|FINISHED|FAILED)\b', status_m.group(1), re.IGNORECASE):
+        return None
+
+    is_active = bool(
+        re.search(r'(READY FOR AGENT EXECUTION|EXECUTE IMMEDIATELY|EXECUTE ALL STAGES|EXECUTE DIRECTLY|ACTIVE TASK|UNIFIED ALL-IN-ONE EXECUTION RUNBOOK)', top_block, re.IGNORECASE)
+    )
+    if not is_active:
+        return None
+
+    content_hash = hashlib.sha256(top_block.encode("utf-8")).hexdigest()
+    cache = _load_processed_cache()
+    if content_hash in cache.get("content_hashes", []):
+        return None
+
+    task_id_m = re.search(r'TASK\\?_ID\s*:\s*([A-Za-z0-9_\-]+)', top_block, re.IGNORECASE)
+    task_id = task_id_m.group(1).replace('\\', '') if task_id_m else f"DOCB-{content_hash[:8]}"
+    header_m = re.search(r'\\?\[([^\[\]]+)\\?\]', first_line)
+    title = header_m.group(1).strip() if header_m else first_line[:120]
+
+    return {
+        "jobId": f"DOCB-LOCAL-{content_hash[:10]}",
+        "type": "DOC_B_DISPATCH",
+        "taskType": "DOC_B_DISPATCH",
+        "taskId": task_id,
+        "title": title,
+        "source": "CMS2_LOCAL_DOCB_BRIDGE",
+        "docId": doc_b_id,
+        "contentHash": content_hash,
+        "promptText": top_block[:4000]
+    }
+
+
 def poll_and_process_pending_jobs(dry_run: bool = False) -> Dict[str, Any]:
-    """Fetches PENDING_JOBS from GAS and processes any allowlisted DOC_B_DISPATCH jobs."""
+    """Fetches PENDING_JOBS from GAS (plus local Doc B fallback) and processes allowlisted DOC_B_DISPATCH jobs."""
     res = fetch_pending_jobs()
     if not res.get("success"):
         return {"success": False, "error": res.get("error", "Failed to fetch pending jobs"), "processed": 0}
     if res.get("action") != "GET_PENDING_JOBS":
         return {"success": False, "error": f"Unexpected GAS action response: {res.get('action')}", "processed": 0}
 
-    jobs = res.get("jobs") or []
+    jobs = list(res.get("jobs") or [])
+    if not jobs:
+        doc_b_state = res.get("docBState") or {}
+        if not doc_b_state.get("lastTopActive", False):
+            local_job = fetch_doc_b_top_active_job()
+            if local_job:
+                if not dry_run:
+                    sub_res = submit_job(local_job)
+                    if sub_res.get("success") and sub_res.get("job"):
+                        jobs.append(sub_res["job"])
+                    else:
+                        jobs.append(local_job)
+                else:
+                    jobs.append(local_job)
+
     results = []
     for job in jobs:
         if not isinstance(job, dict):

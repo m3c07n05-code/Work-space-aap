@@ -633,16 +633,16 @@ function isDocBTopBlockActive_(topText) {
   const statusMatch = topText.match(/STATUS\s*:\s*([^\r\n]+)/i);
   if (statusMatch) {
     const statusUpper = statusMatch[1].toUpperCase();
-    if (/(PAUSED|COMPLETED|DONE|BLOCKED|CANCELLED|HOLD|SKIPPED|FINISHED|FAILED)/.test(statusUpper)) {
+    if (/(PAUSED|COMPLETED|DONE|BLOCKED|CANCELLED|HOLD|SKIPPED|FINISHED|FAILED|EXECUTION REPORT)/.test(statusUpper)) {
       return false;
     }
-    if (/\b(ACTIVE|READY FOR AGENT EXECUTION|QUEUED|EXECUTE NOW|PENDING EXECUTION)\b/.test(statusUpper)) {
+    if (/\b(ACTIVE|READY FOR AGENT EXECUTION|QUEUED|EXECUTE NOW|EXECUTE IMMEDIATELY|OWNER APPROVED|PENDING EXECUTION|EXECUTE DIRECTLY)\b/.test(statusUpper)) {
       return true;
     }
     return false;
   }
   const firstLine = (topText.split('\n')[0] || '').trim();
-  if (/^\[ACTIVE TASK/i.test(firstLine) && !/(PAUSED|COMPLETED|DONE|BLOCKED|CANCELLED)/i.test(topText)) {
+  if (/^\[(ACTIVE TASK|CRD TASK DISPATCH|CRD UNIFIED|ANTIGRAVITY RUNBOOK)/i.test(firstLine) && !/EXECUTION REPORT/i.test(firstLine) && !/(STATUS\s*:\s*(PAUSED|COMPLETED|DONE|BLOCKED|CANCELLED))/i.test(topText)) {
     return true;
   }
   return false;
