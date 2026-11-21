@@ -43,6 +43,47 @@ function doGet(e) {
       });
     }
 
+    if (action === 'CLAIM_JOB') {
+      const targetJobId = String(params.jobId || '');
+      const workerId = String(params.workerId || 'CMS-2').slice(0, 40);
+      const nowIso = new Date().toISOString();
+      return withScriptLock_(function() {
+        const manifest = loadOrCreateManifest_();
+        const job = manifest.pendingJobs.find(function(j) { return j && j.jobId === targetJobId; });
+        if (!job) {
+          return jsonResponse_({
+            success: false,
+            claimed: false,
+            action: 'CLAIM_JOB',
+            error: 'Job not found in pendingJobs: ' + targetJobId,
+            timestamp: nowIso
+          });
+        }
+        if (job.status !== 'PENDING') {
+          return jsonResponse_({
+            success: false,
+            claimed: false,
+            action: 'CLAIM_JOB',
+            job: job,
+            error: 'Job already in status ' + job.status,
+            timestamp: nowIso
+          });
+        }
+        job.status = 'IN_PROGRESS';
+        job.claimedBy = workerId;
+        job.claimedAtIso = nowIso;
+        manifest.lastUpdated = nowIso;
+        saveManifest_(manifest);
+        return jsonResponse_({
+          success: true,
+          claimed: true,
+          action: 'CLAIM_JOB',
+          job: job,
+          timestamp: nowIso
+        });
+      });
+    }
+
     return jsonResponse_({
       success: true,
       action: 'PING',

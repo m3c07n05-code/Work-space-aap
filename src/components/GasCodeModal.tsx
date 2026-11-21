@@ -60,6 +60,12 @@ function doPost(e) {
     if (action === 'WORK4_QUEUE_PRINT_JOB') {
       return handleWork4QueuePrintJob(payload);
     }
+    if (action === 'DEVICE_HEARTBEAT') {
+      return handleDeviceHeartbeat(payload);
+    }
+    if (action === 'SET_CONFIRM_GATE' || action === 'SET_GATE' || action === 'UPDATE_GATE') {
+      return handleSetConfirmGate(payload);
+    }
     return jsonResponse({ success: false, manifestUpdated: false, error: 'Unsupported action: ' + action });
   } catch (err) {
     return jsonResponse({ success: false, manifestUpdated: false, error: String(err) });
@@ -221,6 +227,96 @@ function handleWork4QueuePrintJob(payload) {
     timestamp: nowIso,
     message: 'Work 4 print job queued successfully in PENDING state'
   });
+}
+
+function handleDeviceHeartbeat(payload) {
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+  } catch (lockErr) {
+    return jsonResponse({ success: false, manifestUpdated: false, error: 'Could not obtain script lock: ' + String(lockErr) });
+  }
+  try {
+    const workspaceId = String((payload && payload.workspaceId) || '1RvGehvlDrPTaR9JvQgCcFPqiQbRE8_yn');
+    const targetManifest = String((payload && payload.targetManifest) || '00_Project_Manifest.json');
+    const nowIso = new Date().toISOString();
+    const folder = DriveApp.getFolderById(workspaceId);
+    const files = folder.getFilesByName(targetManifest);
+    if (!files.hasNext()) return jsonResponse({ success: false, manifestUpdated: false, error: 'Manifest file not found' });
+    const manifestFile = files.next();
+    const raw = manifestFile.getBlob().getDataAsString('UTF-8');
+    if (!raw || !raw.trim()) return jsonResponse({ success: false, manifestUpdated: false, error: 'Existing manifest file is empty' });
+    const manifestData = JSON.parse(raw);
+    if (!manifestData.devices || typeof manifestData.devices !== 'object') manifestData.devices = {};
+    const deviceId = String(payload.deviceId || 'cms-2-swift-zone');
+    const existingDevice = (manifestData.devices[deviceId] && typeof manifestData.devices[deviceId] === 'object') ? manifestData.devices[deviceId] : {};
+    const deviceEntry = Object.assign({}, existingDevice, {
+      deviceId: deviceId,
+      deviceType: String(payload.deviceType || existingDevice.deviceType || 'PC'),
+      label: String(payload.label || existingDevice.label || deviceId),
+      lastSeenIso: nowIso
+    });
+    if (payload.status) deviceEntry.status = String(payload.status);
+    manifestData.devices[deviceId] = deviceEntry;
+    manifestData.lastUpdated = nowIso;
+    manifestData.lastPingIso = nowIso;
+    const serialized = JSON.stringify(manifestData, null, 2);
+    JSON.parse(serialized);
+    manifestFile.setContent(serialized);
+    return jsonResponse({ success: true, action: 'DEVICE_HEARTBEAT', manifestUpdated: true, serverTimeIso: nowIso, device: deviceEntry, manifest: manifestData });
+  } catch (err) {
+    return jsonResponse({ success: false, manifestUpdated: false, error: String(err) });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function handleSetConfirmGate(payload) {
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+  } catch (lockErr) {
+    return jsonResponse({ success: false, manifestUpdated: false, error: 'Could not obtain script lock: ' + String(lockErr) });
+  }
+  try {
+    const workspaceId = String((payload && payload.workspaceId) || '1RvGehvlDrPTaR9JvQgCcFPqiQbRE8_yn');
+    const targetManifest = String((payload && payload.targetManifest) || '00_Project_Manifest.json');
+    const nowIso = new Date().toISOString();
+    const folder = DriveApp.getFolderById(workspaceId);
+    const files = folder.getFilesByName(targetManifest);
+    if (!files.hasNext()) return jsonResponse({ success: false, manifestUpdated: false, error: 'Manifest file not found' });
+    const manifestFile = files.next();
+    const raw = manifestFile.getBlob().getDataAsString('UTF-8');
+    if (!raw || !raw.trim()) return jsonResponse({ success: false, manifestUpdated: false, error: 'Existing manifest file is empty' });
+    const manifestData = JSON.parse(raw);
+    if (typeof payload.gateStatus === 'string' && payload.gateStatus.trim()) {
+      manifestData.gateStatus = payload.gateStatus.trim();
+    } else if (!manifestData.gateStatus) {
+      manifestData.gateStatus = 'WAITING_OWNER_CONFIRM';
+    }
+    if (Object.prototype.hasOwnProperty.call(payload, 'activeTask')) {
+      manifestData.activeTask = payload.activeTask;
+    }
+    if (payload.devices && typeof payload.devices === 'object') {
+      if (!manifestData.devices || typeof manifestData.devices !== 'object') manifestData.devices = {};
+      Object.keys(payload.devices).forEach(function(devKey) {
+        const incoming = payload.devices[devKey];
+        if (incoming && typeof incoming === 'object') {
+          const prev = (manifestData.devices[devKey] && typeof manifestData.devices[devKey] === 'object') ? manifestData.devices[devKey] : {};
+          manifestData.devices[devKey] = Object.assign({}, prev, incoming);
+        }
+      });
+    }
+    manifestData.lastUpdated = nowIso;
+    const serialized = JSON.stringify(manifestData, null, 2);
+    JSON.parse(serialized);
+    manifestFile.setContent(serialized);
+    return jsonResponse({ success: true, action: String(payload.action || 'SET_CONFIRM_GATE'), manifestUpdated: true, serverTimeIso: nowIso, gateStatus: manifestData.gateStatus, activeTask: manifestData.activeTask, manifest: manifestData });
+  } catch (err) {
+    return jsonResponse({ success: false, manifestUpdated: false, error: String(err) });
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function jsonResponse(obj) {

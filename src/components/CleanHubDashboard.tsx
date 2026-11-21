@@ -23,7 +23,7 @@ interface CleanHubDashboardProps {
   config: GatewayConfig;
   scopesCount: number;
   logCount: number;
-  onNavigate: (view: 'ai-studio' | 'scope-builder' | 'stop-gates' | 'gascode' | 'proposed-work' | 'work4') => void;
+  onNavigate: (view: 'ai-studio' | 'scope-builder' | 'stop-gates' | 'gascode' | 'proposed-work' | 'work1' | 'work4') => void;
   onOpenGatewayModal: () => void;
   onOpenLogsModal: () => void;
   onOpenExportModal?: () => void;
@@ -43,6 +43,18 @@ export const CleanHubDashboard: React.FC<CleanHubDashboardProps> = ({
   const isLight = theme === 'light';
 
   const menuCards = [
+    {
+      id: 'work1',
+      title: 'WORK 1 (13 คอลัมน์ / CSV) & สำรอง Drive 3D',
+      desc: 'ตารางรายงานพ้นสมาชิกภาพ 13 คอลัมน์ (วาระ 4.1/4.2) ส่งออก CSV และระบบสำรองรายไฟล์ CRD_WORK1_9_BACKUP ด้วย 3D GlassFolder',
+      badge: '13-COL + 3D BACKUP',
+      badgeColor: 'bg-blue-100 text-blue-900 border-blue-300 font-bold',
+      icon: <Layers className="w-6 h-6 text-blue-600 dark:text-teal-400" />,
+      onClick: () => onNavigate('work1'),
+      actionText: 'เปิด WORK 1 & 3D Backup',
+      hasHighlight: true,
+      highlightTag: 'NEW • ZERO-PII',
+    },
     {
       id: 'work4',
       title: 'ระบบพิมพ์หนังสือบอกกล่าว A6 (WORK 4)',

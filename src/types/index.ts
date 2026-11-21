@@ -123,6 +123,8 @@ export interface ProjectManifest {
   lastUpdated?: string;
   updatedAt?: string;
   currentStatus?: string;
+  gateStatus?: string;
+  activeTask?: Record<string, unknown> | null;
   modules: ManifestModule[];
   history_logs?: string[];
   devices?: Record<string, unknown>;

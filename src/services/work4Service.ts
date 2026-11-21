@@ -53,7 +53,8 @@ class Work4Service {
   async getStatus(year = '2026', month = '11'): Promise<Work4StatusResponse> {
     try {
       const res = await fetch(`/api/work4/status?year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}`);
-      if (res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
         const data = await res.json();
         this.currentMode = data.mode;
         return data;
@@ -85,7 +86,8 @@ class Work4Service {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params),
       });
-      if (res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
         return await res.json();
       }
     } catch {
@@ -118,7 +120,8 @@ class Work4Service {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(req),
       });
-      if (res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
         return await res.json();
       }
     } catch {
@@ -150,7 +153,8 @@ class Work4Service {
   async toggleMode(): Promise<Work4StatusResponse> {
     try {
       const res = await fetch('/api/work4/toggle-mode', { method: 'POST' });
-      if (res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
         const data = await res.json();
         this.currentMode = data.mode;
         return data;
