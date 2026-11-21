@@ -6,16 +6,16 @@ import {
   Code2,
   Terminal,
   Settings,
-  ArrowRight,
   Layers,
   CheckCircle2,
   ChevronRight,
-  Zap,
   Download,
+  Bot,
+  Box,
   Printer
 } from 'lucide-react';
 import { GatewayConfig } from '../types';
-import { WORKSPACE_FOLDER_ID, MANIFEST_FILE_NAME } from '../services/backendGateway';
+import { MANIFEST_FILE_NAME } from '../services/backendGateway';
 import { LiquidButton } from './ui/liquid-glass-button';
 import { GlassBox } from './ui/glass-box';
 
@@ -23,7 +23,17 @@ interface CleanHubDashboardProps {
   config: GatewayConfig;
   scopesCount: number;
   logCount: number;
-  onNavigate: (view: 'ai-studio' | 'scope-builder' | 'stop-gates' | 'gascode' | 'proposed-work' | 'work1' | 'work4') => void;
+  onNavigate: (
+    view:
+      | 'work4-studio'
+      | 'ai-chat'
+      | '3d-view'
+      | 'ai-studio'
+      | 'scope-builder'
+      | 'stop-gates'
+      | 'gascode'
+      | 'proposed-work'
+  ) => void;
   onOpenGatewayModal: () => void;
   onOpenLogsModal: () => void;
   onOpenExportModal?: () => void;
@@ -31,53 +41,69 @@ interface CleanHubDashboardProps {
 }
 
 export const CleanHubDashboard: React.FC<CleanHubDashboardProps> = ({
-  config,
   scopesCount,
   logCount,
   onNavigate,
   onOpenGatewayModal,
   onOpenLogsModal,
   onOpenExportModal,
-  theme,
 }) => {
-  const isLight = theme === 'light';
-
   const menuCards = [
     {
-      id: 'work1',
-      title: 'WORK 1 (13 คอลัมน์ / CSV) & สำรอง Drive 3D',
-      desc: 'ตารางรายงานพ้นสมาชิกภาพ 13 คอลัมน์ (วาระ 4.1/4.2) ส่งออก CSV และระบบสำรองรายไฟล์ CRD_WORK1_9_BACKUP ด้วย 3D GlassFolder',
-      badge: '13-COL + 3D BACKUP',
-      badgeColor: 'bg-blue-100 text-blue-900 border-blue-300 font-bold',
-      icon: <Layers className="w-6 h-6 text-blue-600 dark:text-teal-400" />,
-      onClick: () => onNavigate('work1'),
-      actionText: 'เปิด WORK 1 & 3D Backup',
+      id: 'work4-studio',
+      title: 'WORK 4: ห้องควบคุมงานพิมพ์จดหมาย 9 หมวด & EMS',
+      desc: 'เลือกหมวดผู้รับ 9 หมวด (2/4/5 งวด × ผู้กู้/กู้ร่วม/ผู้ค้ำ) ตรวจเลขสมาชิก 5 หลัก รันเลข ก.2 พรีวิวคู่ และสั่งพิมพ์ผ่าน Local Gateway (CMS-2 / LetterPrint.ps1)',
+      badge: 'CMS-2 · 9 หมวด',
+      badgeColor: 'bg-white/85 text-blue-900 border-slate-200/90 font-bold',
+      icon: <Printer className="w-6 h-6 text-blue-600 dark:text-teal-400" />,
+      onClick: () => onNavigate('work4-studio'),
+      actionText: 'เปิดห้องควบคุมงานพิมพ์ WORK 4',
       hasHighlight: true,
-      highlightTag: 'NEW • ZERO-PII',
+      highlightTag: 'พร้อมใช้งานจริง',
     },
     {
-      id: 'work4',
-      title: 'ระบบพิมพ์หนังสือบอกกล่าว A6 (WORK 4)',
-      desc: 'พิมพ์ตรงจาก .RPT 9 หมวด (2/4/5 งวด) สู่กระดาษฟ้า A6 ไม่ผ่าน Excel พร้อมระบบพรีวิวและล็อกปุ่มกันกดเบิ้ล',
-      badge: 'OFFLINE DATA CONTRACT',
-      badgeColor: 'bg-amber-100 text-amber-900 border-amber-300 font-bold',
-      icon: <Printer className="w-6 h-6 text-blue-600 dark:text-teal-400" />,
-      onClick: () => onNavigate('work4'),
-      actionText: 'เปิดห้องพิมพ์ WORK 4',
-      hasHighlight: true,
-      highlightTag: 'NEW • OFFLINE MOCK',
+      id: 'proposed-work',
+      title: 'ศูนย์ปฏิบัติการสายงานจริง CRD WORK 1–9',
+      desc: 'เข้าหน้าจอทำงานจริงของ WORK 1–9 ทุกสายงาน (แยก พม. เดี่ยว/ร่วม, ค้ำประกันไขว้, กฎ V003, รับไฟล์สาขา) พร้อมซิงก์ลง 00_Project_Manifest.json',
+      badge: '9 สายงานปฏิบัติการ',
+      badgeColor: 'bg-white/85 text-indigo-900 border-slate-200/90 font-bold',
+      icon: <Layers className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />,
+      onClick: () => onNavigate('proposed-work'),
+      actionText: 'เปิดศูนย์ปฏิบัติการ WORK 1–9',
+      hasHighlight: false,
+    },
+    {
+      id: 'ai-chat',
+      title: 'ผู้ช่วย Gemini AI Chatbot',
+      desc: 'สนทนาหลายรอบ (Multi-turn) เลือกบทบาทผู้เชี่ยวชาญ CRD แปลงคำตอบเป็นขอบเขตงานและซิงก์เข้า Firestore ได้ทันที',
+      badge: 'Gemini 4 Hydrogen',
+      badgeColor: 'bg-white/85 text-blue-900 border-slate-200/90 font-bold',
+      icon: <Bot className="w-6 h-6 text-blue-600 dark:text-blue-400" />,
+      onClick: () => onNavigate('ai-chat'),
+      actionText: 'เปิดผู้ช่วย AI Chatbot',
+      hasHighlight: false,
+    },
+    {
+      id: '3d-view',
+      title: 'สถาปัตยกรรม CRD 3 มิติ (Three.js)',
+      desc: 'สำรวจแกนกลาง Dual-Key Ledger สายงาน WORK 1–9 และวงแหวน 16 Stop Gates แบบ 3 มิติ โต้ตอบหมุนและคลิกตรวจแต่ละด่านได้',
+      badge: 'Interactive 3D',
+      badgeColor: 'bg-white/85 text-indigo-900 border-slate-200/90 font-bold',
+      icon: <Box className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />,
+      onClick: () => onNavigate('3d-view'),
+      actionText: 'เข้าดูโมเดล CRD 3 มิติ',
+      hasHighlight: false,
     },
     {
       id: 'ai-studio',
       title: 'สั่ง Google AI ออกแบบ UI ในแอป',
-      desc: 'ระบบอ่านโค้ดของตัวเองแบบ Introspection แล้วให้ AI (Gemini Flash) สังเคราะห์หน้าจอใหม่และสเปกขอบเขตงานได้ทันที',
-      badge: 'Gemini 3.8 Flash',
+      desc: 'ระบบอ่านโค้ดของตัวเองแบบ Introspection แล้วให้ AI สังเคราะห์หน้าจอใหม่และสเปกขอบเขตงานได้ทันที',
+      badge: 'Gemini 4 Hydrogen',
       badgeColor: 'bg-white/85 text-blue-900 border-slate-200/90 font-bold',
       icon: <Sparkles className="w-6 h-6 text-blue-600 dark:text-blue-400" />,
       onClick: () => onNavigate('ai-studio'),
       actionText: 'สั่ง AI ออกแบบ UI',
       hasHighlight: false,
-      highlightTag: 'อัปเดตล่าสุด',
     },
     {
       id: 'scope-builder',
@@ -99,17 +125,6 @@ export const CleanHubDashboard: React.FC<CleanHubDashboardProps> = ({
       icon: <ShieldCheck className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />,
       onClick: () => onNavigate('stop-gates'),
       actionText: 'ตรวจสอบ 16 ด่าน',
-      hasHighlight: false,
-    },
-    {
-      id: 'proposed-work',
-      title: 'ผังงาน CRD WORK 1–9',
-      desc: 'โครงสร้างงาน 9 หมวด, สัญญาเดี่ยว/ร่วม, การค้ำประกันไขว้ และเอกสารทางการ Confluence, Jira, Google Drive',
-      badge: '9 หมวดงานหลัก',
-      badgeColor: 'bg-white/85 text-indigo-900 border-slate-200/90 font-bold',
-      icon: <Layers className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />,
-      onClick: () => onNavigate('proposed-work'),
-      actionText: 'ดูผังงาน WORK 1–9',
       hasHighlight: false,
     },
     {
@@ -144,15 +159,15 @@ export const CleanHubDashboard: React.FC<CleanHubDashboardProps> = ({
           <div className="space-y-2">
             <div className="flex items-center gap-2">
               <span className="px-3 py-1 rounded-full text-xs font-mono font-bold bg-white/90 dark:bg-slate-800/80 text-slate-800 dark:text-slate-200 border border-slate-200/80 dark:border-slate-700 shadow-2xs">
-                NexusLedger Hub
+                CRD WEB · NexusLedger Hub
               </span>
-              <span className="text-xs text-slate-500 dark:text-slate-400">· สถาปัตยกรรมสัญญาอัจฉริยะ</span>
+              <span className="text-xs text-slate-500 dark:text-slate-400">· ศูนย์รวมพัฒนา CRD WEB</span>
             </div>
             <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-[#14243A] dark:text-white">
               เลือกเมนูเพื่อเริ่มใช้งานหรือสั่งงานระบบ
             </h1>
             <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 max-w-2xl leading-relaxed">
-              กล่องข้อความและเมนูถูกสร้างขึ้นด้วยสถาปัตยกรรมกระจกน้ำ 3 มิติ (GlassBox) มีมิติแสงสะท้อนชัดเจน และปุ่มไม่จมกลืนกับพื้นหลัง
+              รวมโมดูล CRD WEB ทั้งผู้ช่วย Gemini AI, ภาพสถาปัตยกรรม 3 มิติ, ตัวสร้างขอบเขตงาน และ 16 ด่าน Stop Gates พร้อมซิงก์เข้า Cloud Firestore และ Google Drive
             </p>
           </div>
 

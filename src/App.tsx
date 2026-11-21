@@ -17,16 +17,24 @@ import { GasCodeModal } from './components/GasCodeModal';
 import { PayloadLogsModal } from './components/PayloadLogsModal';
 import { ExportCodeModal } from './components/ExportCodeModal';
 import { AICommandDispatcher } from './components/AICommandDispatcher';
+import { GeminiChatbotView } from './components/GeminiChatbotView';
+import { CrdArchitecture3DView } from './components/CrdArchitecture3DView';
+import { Work4LetterPrintStudio } from './components/Work4LetterPrintStudio';
 import { LiquidNavbar, NimbusIcons, LiquidNavItem } from './components/ui/liquid-glass-navbar';
-import { Work4PrintStudio } from './components/Work4PrintStudio';
-import { Work1AndBackupStudio } from './components/Work1AndBackupStudio';
-
 import { backendGateway } from './services/backendGateway';
-import { GatewayConfig, ManifestModule } from './types';
+import { GatewayConfig } from './types';
 import { Terminal, ArrowLeft } from 'lucide-react';
 
-export type ActiveTabType = 'overview' | 'work1' | 'work4' | 'scope-builder' | 'ai-studio' | 'stop-gates' | 'gascode' | 'proposed-work';
-
+export type ActiveTabType =
+  | 'overview'
+  | 'work4-studio'
+  | 'ai-chat'
+  | '3d-view'
+  | 'scope-builder'
+  | 'ai-studio'
+  | 'stop-gates'
+  | 'gascode'
+  | 'proposed-work';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTabType>('overview');
@@ -38,18 +46,8 @@ export default function App() {
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [logCount, setLogCount] = useState(backendGateway.getLogs().length);
   const [scopesCount, setScopesCount] = useState(backendGateway.getScopes().length);
-  const [manifestModules, setManifestModules] = useState<ManifestModule[]>(
-    backendGateway.getManifest()?.modules || []
-  );
 
   useEffect(() => {
-    // Fetch live modules from 00_Project_Manifest.json via backendGateway
-    backendGateway.readManifest().then((res) => {
-      if (res.success && res.manifest?.modules) {
-        setManifestModules(res.manifest.modules);
-      }
-    });
-
     const unsubConfig = backendGateway.onConfigChange((newConfig) => {
       setConfig(newConfig);
     });
@@ -59,26 +57,20 @@ export default function App() {
     const unsubScopes = backendGateway.onScopeChange((scopes) => {
       setScopesCount(scopes.length);
     });
-    const unsubManifest = backendGateway.onManifestChange((manifest) => {
-      if (manifest?.modules) {
-        setManifestModules(manifest.modules);
-      }
-    });
     return () => {
       unsubConfig();
       unsubLogs();
       unsubScopes();
-      unsubManifest();
     };
   }, []);
 
-  // Liquid Navbar items matching IMG_5351.png
+  // Liquid Navbar items matching Hub + 5-tab Bottom Bar
   const navItems: LiquidNavItem[] = [
     { label: "หน้าหลัก", icon: NimbusIcons.home, fx: "glow" },
-    { label: "ขอบเขตงาน", icon: NimbusIcons.globe, fx: "spin" },
-    { label: "สั่ง AI ออกแบบ", icon: NimbusIcons.plane, fx: "plane" },
-    { label: "ตรวจ 16 ด่าน", icon: NimbusIcons.drop, fx: "drop" },
-    { label: "ตั้งค่า", icon: NimbusIcons.user, fx: "wave" },
+    { label: "3 มิติ", icon: NimbusIcons.globe, fx: "spin" },
+    { label: "AI แชท", icon: NimbusIcons.plane, fx: "plane" },
+    { label: "ขอบเขตงาน", icon: NimbusIcons.drop, fx: "drop" },
+    { label: "16 ด่าน", icon: NimbusIcons.user, fx: "wave" },
   ];
 
   // Map active tab to navbar index 0..4
@@ -86,13 +78,16 @@ export default function App() {
     switch (activeTab) {
       case 'overview':
         return 0;
-      case 'scope-builder':
-      case 'proposed-work':
+      case '3d-view':
         return 1;
+      case 'ai-chat':
       case 'ai-studio':
         return 2;
-      case 'stop-gates':
+      case 'scope-builder':
+      case 'proposed-work':
+      case 'work4-studio':
         return 3;
+      case 'stop-gates':
       case 'gascode':
         return 4;
       default:
@@ -106,16 +101,16 @@ export default function App() {
         setActiveTab('overview');
         break;
       case 1:
-        setActiveTab('scope-builder');
+        setActiveTab('3d-view');
         break;
       case 2:
-        setActiveTab('ai-studio');
+        setActiveTab('ai-chat');
         break;
       case 3:
-        setActiveTab('stop-gates');
+        setActiveTab('scope-builder');
         break;
       case 4:
-        setIsGatewayModalOpen(true);
+        setActiveTab('stop-gates');
         break;
     }
   };
@@ -169,18 +164,19 @@ export default function App() {
               <span>← กลับหน้าหลัก (Hub)</span>
             </button>
             <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
-              {activeTab === 'work1' && 'WORK 1: ตาราง 13 คอลัมน์ & สำรอง Drive 3D'}
-              {activeTab === 'work4' && 'WORK 4: ระบบพิมพ์หนังสือบอกกล่าว A6'}
+              {activeTab === 'work4-studio' && 'WORK 4: ห้องควบคุมงานพิมพ์จดหมาย 9 หมวด & EMS'}
+              {activeTab === 'ai-chat' && 'Gemini AI Chatbot (Multi-Turn)'}
+              {activeTab === '3d-view' && 'Three.js 3D CRD Architecture'}
               {activeTab === 'ai-studio' && 'Google AI UI Studio'}
               {activeTab === 'scope-builder' && 'Scope Builder'}
               {activeTab === 'stop-gates' && '16 Stop Gates Audit'}
-              {activeTab === 'proposed-work' && 'CRD WORK 1–9'}
+              {activeTab === 'proposed-work' && 'ศูนย์ปฏิบัติการสายงานจริง CRD WORK 1–9'}
               {activeTab === 'gascode' && 'Google Apps Script (Code.gs)'}
             </span>
           </div>
         )}
 
-        {/* View 1: Clean Hub Dashboard (Simple 6-card Hub, no bloated banner!) */}
+        {/* View 1: Clean Hub Dashboard */}
         {activeTab === 'overview' && (
           <CleanHubDashboard
             config={config}
@@ -194,17 +190,25 @@ export default function App() {
           />
         )}
 
-        {/* View: WORK 1 13-Column Report & CRD_WORK1_9_BACKUP 3D GlassFolder */}
-        {activeTab === 'work1' && (
-          <Work1AndBackupStudio theme={theme} />
+        {/* View 1A: Dedicated WORK 4 Monthly Letter & EMS Printing Control Room */}
+        {activeTab === 'work4-studio' && (
+          <div className="space-y-6 animate-fade-in">
+            <Work4LetterPrintStudio onOpenLogsModal={() => setIsLogsModalOpen(true)} />
+          </div>
         )}
 
-        {/* View: WORK 4 Direct-RPT Print & Preview Studio (A6 Edition) */}
-        {activeTab === 'work4' && (
-          <Work4PrintStudio
-            onBack={() => setActiveTab('overview')}
-            theme={theme}
-          />
+        {/* View 1B: Multi-Turn Gemini AI Chatbot */}
+        {activeTab === 'ai-chat' && (
+          <div className="space-y-6 animate-fade-in">
+            <GeminiChatbotView />
+          </div>
+        )}
+
+        {/* View 1C: Interactive Three.js 3D CRD Architecture */}
+        {activeTab === '3d-view' && (
+          <div className="space-y-6 animate-fade-in">
+            <CrdArchitecture3DView />
+          </div>
         )}
 
         {/* View 2: Self-Evolving In-App AI UI Designer & Code Introspection */}
@@ -221,7 +225,10 @@ export default function App() {
         {activeTab === 'scope-builder' && (
           <div className="space-y-6 animate-fade-in">
             <ScopeBuilderClean onOpenLogsModal={() => setIsLogsModalOpen(true)} />
-            <ProposedWorkGrid onSelectWork={(w) => setActiveTab(w as ActiveTabType)} />
+            <ProposedWorkGrid
+              initialSelectedWorkId="WORK 1"
+              onOpenLogsModal={() => setIsLogsModalOpen(true)}
+            />
           </div>
         )}
 
@@ -232,10 +239,13 @@ export default function App() {
           </div>
         )}
 
-        {/* View 5: Proposed WORK 1–9 Grid Dedicated View */}
+        {/* View 5: Operational WORK 1–9 Hub Dedicated View */}
         {activeTab === 'proposed-work' && (
           <div className="space-y-6 animate-fade-in">
-            <ProposedWorkGrid onSelectWork={(w) => setActiveTab(w as ActiveTabType)} />
+            <ProposedWorkGrid
+              initialSelectedWorkId="WORK 1"
+              onOpenLogsModal={() => setIsLogsModalOpen(true)}
+            />
           </div>
         )}
 
@@ -256,13 +266,12 @@ export default function App() {
               ? 'bg-white/95 hover:bg-slate-50 border-blue-200 text-[#14243A]'
               : 'bg-[#0e1626]/95 hover:bg-slate-800 border-teal-500/40 text-slate-200'
           }`}
-          title={`ดูประวัติการส่งคำสั่งและโมดูลจริงจาก 00_Project_Manifest.json (${manifestModules.length} Modules)`}
         >
           <Terminal className="w-4 h-4 text-blue-600 dark:text-teal-400" />
           <span className="font-semibold">Live Payloads</span>
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
           <span className="px-1.5 py-0.5 rounded-md bg-blue-50 dark:bg-slate-800 text-blue-700 dark:text-teal-300 font-mono text-[11px] font-bold">
-            {manifestModules.length > 0 ? manifestModules.length : logCount}
+            {logCount}
           </span>
         </button>
       </div>
@@ -299,7 +308,6 @@ export default function App() {
       <PayloadLogsModal
         isOpen={isLogsModalOpen}
         onClose={() => setIsLogsModalOpen(false)}
-        manifestModules={manifestModules}
       />
 
       <ExportCodeModal

@@ -237,6 +237,16 @@ class BackendGatewayService {
     this.notifyScopes();
   }
 
+  public replaceScopes(scopes: ScopeItem[]): void {
+    this.scopes = scopes;
+    try {
+      localStorage.setItem(STORAGE_KEY_SCOPES, JSON.stringify(this.scopes));
+    } catch {
+      // ignore
+    }
+    this.notifyScopes();
+  }
+
   public onScopeChange(listener: ScopeListener): () => void {
     this.scopeListeners.add(listener);
     return () => this.scopeListeners.delete(listener);

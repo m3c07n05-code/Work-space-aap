@@ -3,6 +3,7 @@ import { PlusCircle, Sparkles, Send, RefreshCw, CheckCircle2, Trash2, FolderGit2
 import { backendGateway } from '../services/backendGateway';
 import { ScopeItem } from '../types';
 import { LiquidButton, MetalButton } from './ui/liquid-glass-button';
+import { useFirebase } from '../contexts/FirebaseContext';
 
 const PRESET_TEMPLATES = {
   WORK1: {
@@ -36,6 +37,7 @@ interface ScopeBuilderCleanProps {
 }
 
 export const ScopeBuilderClean: React.FC<ScopeBuilderCleanProps> = ({ onOpenLogsModal }) => {
+  const { user, syncScopeToCloud, deleteScopeFromCloud } = useFirebase();
   const [scopes, setScopes] = useState<ScopeItem[]>(backendGateway.getScopes());
   const [code, setCode] = useState(`CRD-SCOPE-0${scopes.length + 1}`);
   const [title, setTitle] = useState('');
@@ -81,6 +83,9 @@ export const ScopeBuilderClean: React.FC<ScopeBuilderCleanProps> = ({ onOpenLogs
 
     try {
       backendGateway.addScope(newScope);
+      if (user) {
+        syncScopeToCloud(newScope).catch((err) => console.error('Cloud scope sync warning:', err));
+      }
       const res = await backendGateway.dispatchAction('ADD_SCOPE', {
         scope: newScope,
         manifestTarget: '00_Project_Manifest.json',
@@ -101,6 +106,9 @@ export const ScopeBuilderClean: React.FC<ScopeBuilderCleanProps> = ({ onOpenLogs
 
   const handleSyncToDrive = async (scope: ScopeItem) => {
     setSyncingId(scope.id);
+    if (user) {
+      await syncScopeToCloud(scope).catch((err) => console.error('Cloud scope sync warning:', err));
+    }
     await backendGateway.dispatchAction('SYNC_EXISTING_SCOPE', {
       scope,
       manifestTarget: '00_Project_Manifest.json',
@@ -110,6 +118,9 @@ export const ScopeBuilderClean: React.FC<ScopeBuilderCleanProps> = ({ onOpenLogs
 
   const handleDeleteScope = (id: string) => {
     backendGateway.removeScope(id);
+    if (user) {
+      deleteScopeFromCloud(id).catch((err) => console.error('Cloud scope delete warning:', err));
+    }
   };
 
   return (

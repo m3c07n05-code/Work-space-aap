@@ -1,16 +1,123 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
 
 dotenv.config();
 
 const app = express();
 const PORT = 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 
-// API: AI Command Generator using Gemini Flash
+function createGeminiClient() {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return null;
+  return new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: { 'User-Agent': 'aistudio-build' },
+    },
+  });
+}
+
+// API: Multi-turn Gemini Chatbot for CRD WEB
+app.post('/api/ai/chat', async (req, res) => {
+  try {
+    const { messages = [], message, mode = 'general', customInstruction } = req.body;
+    if (!message || !String(message).trim()) {
+      return res.status(400).json({ error: 'กรุณาระบุข้อความคำถาม' });
+    }
+
+    const modeConfigMap: Record<
+      string,
+      { model: string; thinkingLevel: ThinkingLevel; roleLabel: string; rolePrompt: string }
+    > = {
+      deep: {
+        model: 'gemini-4-hydrogen',
+        thinkingLevel: ThinkingLevel.XHIGH,
+        roleLabel: 'สถาปนิกความปลอดภัย 16 Stop Gates & PDPA Zero-PII',
+        rolePrompt:
+          'คุณคือสถาปนิกความปลอดภัยอาวุโสของระบบ CRD WEB เชี่ยวชาญการวิเคราะห์ด่าน Stop Gates 1-16, กฎ V003, และมาตรฐาน Zero-PII PDPA ตอบอย่างละเอียดเป็นขั้นตอน พร้อมจุดเสี่ยงที่ต้องระวัง',
+      },
+      complex: {
+        model: 'gemini-4-hydrogen',
+        thinkingLevel: ThinkingLevel.HIGH,
+        roleLabel: 'วิศวกรโครงสร้าง Dual-Key & Google Apps Script',
+        rolePrompt:
+          'คุณคือวิศวกรหลักของ CRD WEB เชี่ยวชาญโครงสร้าง WORK 1-9, การแยกคีย์ระดับบุคคล (Mem_ID 5 หลัก) ออกจากระดับสัญญา (NewLoanID), การเขียนโค้ด React/TypeScript และ Code.gs เชื่อมต่อ 00_Project_Manifest.json',
+      },
+      general: {
+        model: 'gemini-4-hydrogen',
+        thinkingLevel: ThinkingLevel.LOW,
+        roleLabel: 'ผู้ช่วยพัฒนาระบบ CRD WEB ทั่วไป',
+        rolePrompt:
+          'คุณคือผู้ช่วยอัจฉริยะประจำระบบ CRD WEB & NexusLedger ตอบคำถามเป็นภาษาไทยที่สุภาพ กระชับ ชัดเจน และให้คำแนะนำเชิงปฏิบัติได้ทันที',
+      },
+      fast: {
+        model: 'gemini-3.1-flash-lite',
+        thinkingLevel: ThinkingLevel.MINIMAL,
+        roleLabel: 'ผู้ตรวจสอบรหัส 5 หลัก & รูปแบบ V003 ด่วน',
+        rolePrompt:
+          'คุณคือผู้ช่วยตอบเร็วพิเศษสำหรับตรวจสอบรูปแบบเลขสมาชิก 5 หลัก (Leading Zero), กฎ V003 (พ.ศ./ค.ศ. และห้ามคำนวณเงินใหม่), และสรุปคำสั่งด่วน ตอบสั้น กระชับ ตรงประเด็นใน 3-5 บรรทัด',
+      },
+    };
+
+    const selected = modeConfigMap[mode] || modeConfigMap.general;
+    const systemInstruction = customInstruction
+      ? `${selected.rolePrompt}\n\nบริบทเพิ่มเติม: ${String(customInstruction)}`
+      : `${selected.rolePrompt}\n\nข้อมูลระบบ: Workspace Folder ID = 1RvGehvlDrPTaR9JvQgCcFPqiQbRE8_yn, Manifest = 00_Project_Manifest.json, Gateway = Google Apps Script Web App`;
+
+    const ai = createGeminiClient();
+    if (!ai) {
+      return res.status(503).json({
+        error: 'ไม่พบ GEMINI_API_KEY ในการตั้งค่าเซิร์ฟเวอร์ กรุณาตรวจสอบใน Settings > Secrets',
+      });
+    }
+
+    const history = Array.isArray(messages)
+      ? messages
+          .filter((m) => m && typeof m.text === 'string' && (m.role === 'user' || m.role === 'model'))
+          .slice(-24)
+          .map((m) => ({
+            role: m.role as 'user' | 'model',
+            parts: [{ text: String(m.text) }],
+          }))
+      : [];
+
+    const chat = ai.chats.create({
+      model: selected.model,
+      history,
+      config: {
+        systemInstruction,
+        thinkingConfig: {
+          thinkingLevel: selected.thinkingLevel,
+        },
+      },
+    });
+
+    const response = await chat.sendMessage({
+      message: String(message).trim(),
+    });
+
+    const reply = response.text || 'ไม่สามารถสร้างคำตอบได้ในขณะนี้';
+    return res.json({
+      success: true,
+      reply,
+      modelUsed: selected.model,
+      roleLabel: selected.roleLabel,
+      thinkingMode: mode,
+    });
+  } catch (err: unknown) {
+    console.error('Gemini chat error:', err);
+    const msg = err instanceof Error ? err.message : 'เกิดข้อผิดพลาดระหว่างเชื่อมต่อ Gemini API';
+    return res.status(500).json({
+      error: msg,
+    });
+  }
+});
+
+// API: AI Command Generator using Gemini 4 Hydrogen
 app.post('/api/ai/generate-scope', async (req, res) => {
   try {
     const { prompt } = req.body;
@@ -18,8 +125,8 @@ app.post('/api/ai/generate-scope', async (req, res) => {
       return res.status(400).json({ error: 'Prompt is required' });
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
+    const ai = createGeminiClient();
+    if (!ai) {
       const cleanPrompt = String(prompt).trim();
       const fallbackResult = {
         id: `CRD-AI-${Math.floor(100 + Math.random() * 900)}`,
@@ -31,15 +138,8 @@ app.post('/api/ai/generate-scope', async (req, res) => {
       return res.json({ success: true, result: fallbackResult, isFallback: true });
     }
 
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: { 'User-Agent': 'aistudio-build' },
-      },
-    });
-
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: 'gemini-4-hydrogen',
       contents: `คุณคือ AI สถาปัตยกรรมสัญญาอัจฉริยะและการขยายขอบเขตงานอัตโนมัติ (NexusLedger Architecture Engine)
 ผู้ใช้ต้องการส่งคำสั่งเพื่อขยายขอบเขตงานหรือสร้างรูปแบบใหม่ในแอป:
 "${prompt}"
@@ -68,7 +168,7 @@ app.post('/api/ai/generate-scope', async (req, res) => {
 
     const parsed = JSON.parse(response.text || '{}');
     return res.json({ success: true, result: parsed, isFallback: false });
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('Gemini error:', err);
     const cleanPrompt = String(req.body?.prompt || 'คำสั่งขยายขอบเขตงานใหม่').trim();
     const fallbackResult = {
@@ -78,30 +178,41 @@ app.post('/api/ai/generate-scope', async (req, res) => {
       rule: `ขยายขอบเขตงานตามข้อกำหนด "${cleanPrompt}" และซิงก์ผลลัพธ์ลง 00_Project_Manifest.json`,
       actionPrompt: `สร้างฟังก์ชันและหน้าตาสำหรับ: ${cleanPrompt}`,
     };
-    return res.json({ success: true, result: fallbackResult, errorNotice: err?.message, isFallback: true });
+    return res.json({
+      success: true,
+      result: fallbackResult,
+      errorNotice: err instanceof Error ? err.message : String(err),
+      isFallback: true,
+    });
   }
 });
 
 // API: Codebase Introspection Reader
-app.get('/api/ai/codebase-summary', (req, res) => {
+app.get('/api/ai/codebase-summary', (_req, res) => {
   const codebaseInventory = {
-    version: '2026.11.11-CRD-MOBILE',
-    framework: 'React 19 + TypeScript + Vite + Tailwind CSS',
-    gatewayUrl: 'https://script.google.com/macros/s/AKfycbwTEboyfHQ0LzmrP0mtxWCYtrg13Jz5JqKpLVW-8Dtf3bWYqoc-ZoPObtZGjSlKriBU/exec',
+    version: '2026.11.12-CRD-UNIFIED',
+    framework: 'React 19 + TypeScript + Vite + Tailwind CSS + Three.js + Firebase',
+    gatewayUrl:
+      'https://script.google.com/macros/s/AKfycbwTEboyfHQ0LzmrP0mtxWCYtrg13Jz5JqKpLVW-8Dtf3bWYqoc-ZoPObtZGjSlKriBU/exec',
     targetWorkspaceFolderId: '1RvGehvlDrPTaR9JvQgCcFPqiQbRE8_yn',
     manifestFileName: '00_Project_Manifest.json',
     activeGatesCount: 16,
-    coreGates: ['GATE-01: Leading Zero Guard', 'GATE-02: NewLoanID vs Loan_ID_Detial', 'GATE-03: PDPA Zero-PII', 'GATE-04: Drive Manifest Sync'],
+    coreGates: [
+      'GATE-01: Leading Zero Guard',
+      'GATE-02: NewLoanID vs Loan_ID_Detial',
+      'GATE-03: PDPA Zero-PII',
+      'GATE-04: Drive Manifest Sync',
+    ],
     activeScopes: [
       'CRD-SCOPE-01: Dual-Key Ledger Ingestion',
       'CRD-SCOPE-02: V003 Format Control Gate',
       'CRD-SCOPE-03: WORK 1 & WORK 4 Automated Stop Gates',
-      'CRD-SCOPE-04: Self-Expanding Drive Workspace'
+      'CRD-SCOPE-04: Self-Expanding Drive Workspace',
     ],
     themeTokens: {
-      light: { bg: '#F6F9FF', surface: '#FFFFFF', primary: '#1D4ED8', ink: '#14243A', border: '#DFE7F4' },
-      dark: { bg: '#070B12', surface: '#0B101D', primary: '#2DD4BF', ink: '#F1F5F9', border: '#1E293B' }
-    }
+      light: { bg: '#F8F9FA', surface: '#FFFFFF', primary: '#1D4ED8', ink: '#14243A', border: '#E2E8F0' },
+      dark: { bg: '#070B12', surface: '#0B101D', primary: '#2DD4BF', ink: '#F1F5F9', border: '#1E293B' },
+    },
   };
   return res.json({ success: true, codebase: codebaseInventory });
 });
@@ -114,10 +225,10 @@ app.post('/api/ai/self-evolve-design', async (req, res) => {
       return res.status(400).json({ error: 'Prompt is required' });
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    const ai = createGeminiClient();
     const cleanPrompt = String(prompt).trim();
 
-    if (!apiKey) {
+    if (!ai) {
       const fallbackDesign = {
         componentId: `UI-EVOLVE-${Math.floor(100 + Math.random() * 900)}`,
         title: cleanPrompt.length > 50 ? cleanPrompt.substring(0, 48) + '...' : cleanPrompt,
@@ -130,53 +241,34 @@ app.post('/api/ai/self-evolve-design', async (req, res) => {
           metrics: [
             { label: 'รายการตรวจสอบ', value: '1,420 สัญญา', change: '+12% จากสัปดาห์ก่อน' },
             { label: 'ความเร็วประมวลผล', value: '18ms', change: 'GAS Connected' },
-            { label: 'ด่านที่ผ่าน (Pass)', value: '100%', change: 'Zero-PII Safe' }
+            { label: 'ด่านที่ผ่าน (Pass)', value: '100%', change: 'Zero-PII Safe' },
           ],
           actions: ['สแกนข้อมูลชุดใหม่', 'คำนวณเบี้ยปรับ V003', 'ส่งออกรายงาน Drive'],
           primaryActionLabel: 'ประมวลผลคำสั่งในโมดูลนี้ทันที',
           demoDataRows: [
             { col1: '00142', col2: 'LN-2026-X89', col3: 'พม. 1 สัญญา', status: 'PASS' },
             { col1: '00398', col2: 'LN-2026-A12', col3: 'พม. + สัญญาอื่น', status: 'PASS' },
-            { col1: '01024', col2: 'LN-2026-M44', col3: 'หนังสือแจ้งงวด 2', status: 'READY' }
-          ]
-        }
+            { col1: '01024', col2: 'LN-2026-M44', col3: 'หนังสือแจ้งงวด 2', status: 'READY' },
+          ],
+        },
       };
       return res.json({ success: true, design: fallbackDesign, isFallback: true });
     }
 
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: { 'User-Agent': 'aistudio-build' },
-      },
-    });
-
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: `คุณคือ AI สถาปนิกและนักออกแบบ UI อัตโนมัติ (NexusLedger Self-Evolving UI Engine)
+      model: 'gemini-4-hydrogen',
+      contents: `คุณคือ AI สถาปนิกและนักออกแบบ UI อัตโนมัติ (CRD WEB Self-Evolving UI Engine)
 ข้อมูลโค้ดระบบปัจจุบันที่กำลังรันอยู่:
 - Workspace Drive Folder: 1RvGehvlDrPTaR9JvQgCcFPqiQbRE8_yn (AI_Project_Workspace)
 - Target Manifest: 00_Project_Manifest.json
 - กติกาหลัก: V003 Format Control, Dual-Key Ledger, 16 Stop Gates, PDPA Zero-PII
-- สไตล์การออกแบบ: โทนขาว-น้ำเงินสุภาพ (Primary #1D4ED8, Surface #FFFFFF, Bg #F6F9FF) หรือ Dark Mode (#070B12)
-- บริบทโค้ดเพิ่มเติม: ${currentCodeContext || 'NexusLedger React SPA + Apps Script Web App'}
+- สไตล์การออกแบบ: Frosted Cloudy Glass (#F8F9FA) หรือ Dark Mode (#070B12)
+- บริบทโค้ดเพิ่มเติม: ${currentCodeContext || 'CRD WEB React SPA + Firebase + Three.js + Apps Script'}
 
 ผู้ใช้ต้องการให้อ่านโค้ดของตัวเอง แล้วออกแบบส่วนติดต่อผู้ใช้ (UI Component / Design Module) เพิ่มเติมในแอป:
 "${cleanPrompt}"
 
-โปรดสร้างโครงสร้างดีไซน์และข้อมูลจำลองที่พร้อม Render บนหน้าจอจริงในรูปแบบ JSON:
-- componentId: รหัสโมดูล เช่น UI-EVOLVE-01
-- title: ชื่อโมดูลดีไซน์ภาษาไทย
-- category: หนึ่งใน DASHBOARD, CALCULATOR, DOCUMENT_PRINTER, BRANCH_INTAKE, AUDIT_GATE
-- summary: คำอธิบายการออกแบบและประโยชน์ต่อผู้ใช้ (ภาษาไทย)
-- gate: ด่านความปลอดภัยที่กำกับ เช่น DUAL_KEY_LEDGER, V003_FORMAT_ONLY, PDPA_ZERO_PII, AUTO_DRIVE_SYNC
-- rule: กติกาควบคุมทางเทคนิค (ภาษาไทย)
-- actionPrompt: ข้อความคำสั่งภาษาไทยฉบับสมบูรณ์สำหรับ AI Studio
-- uiPreviewData: ออบเจกต์ข้อมูลสำหรับเรนเดอร์ UI Preview แบบมีปฏิสัมพันธ์จริง
-  - metrics: อาเรย์ของ { label, value, change } (3 รายการ)
-  - actions: อาเรย์ปุ่มคำสั่งย่อยในโมดูล (2-3 ปุ่ม)
-  - primaryActionLabel: ข้อความบนปุ่มหลักของโมดูล
-  - demoDataRows: อาเรย์ข้อมูลตัวอย่าง 3 แถว { col1, col2, col3, status }`,
+โปรดสร้างโครงสร้างดีไซน์และข้อมูลจำลองที่พร้อม Render บนหน้าจอจริงในรูปแบบ JSON`,
       config: {
         responseMimeType: 'application/json',
         responseSchema: {
@@ -233,14 +325,14 @@ app.post('/api/ai/self-evolve-design', async (req, res) => {
 
     const parsed = JSON.parse(response.text || '{}');
     return res.json({ success: true, design: parsed, isFallback: false });
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('Self-evolve error:', err);
     const cleanPrompt = String(req.body?.prompt || 'โมดูลส่วนติดต่อผู้ใช้ใหม่').trim();
     const fallbackDesign = {
       componentId: `UI-EVOLVE-${Math.floor(100 + Math.random() * 900)}`,
       title: cleanPrompt.length > 50 ? cleanPrompt.substring(0, 48) + '...' : cleanPrompt,
       category: 'DASHBOARD',
-      summary: `โมดูลออกแบบอัตโนมัติตามข้อกำหนด "${cleanPrompt}" เชื่อมต่อตรงกับระบบ NexusLedger`,
+      summary: `โมดูลออกแบบอัตโนมัติตามข้อกำหนด "${cleanPrompt}" เชื่อมต่อตรงกับระบบ CRD WEB`,
       gate: 'AUTO_DRIVE_SYNC',
       rule: `บันทึกสเปกลง 00_Project_Manifest.json และรักษาความปลอดภัย Zero-PII`,
       actionPrompt: `สร้างฟังก์ชันและคอมโพเนนต์สำหรับ: ${cleanPrompt}`,
@@ -248,18 +340,23 @@ app.post('/api/ai/self-evolve-design', async (req, res) => {
         metrics: [
           { label: 'สัญญาทั้งหมด', value: '2,580 สัญญา', change: 'อัปเดตอัตโนมัติ' },
           { label: 'ความหน่วงระบบ', value: '18ms', change: 'Apps Script' },
-          { label: 'สถานะด่านตรวจ', value: '16 / 16 ผ่าน', change: 'V003 Safe' }
+          { label: 'สถานะด่านตรวจ', value: '16 / 16 ผ่าน', change: 'V003 Safe' },
         ],
         actions: ['ตรวจคีย์สัญญา', 'สแกน 5 หลัก', 'ส่งออก Drive'],
         primaryActionLabel: 'เริ่มรันการประมวลผลโมดูลนี้',
         demoDataRows: [
           { col1: '00551', col2: 'LN-V003-99', col3: 'สาขาภาคเหนือ', status: 'PASS' },
           { col1: '00782', col2: 'LN-V003-01', col3: 'สาขาภาคใต้', status: 'PASS' },
-          { col1: '01290', col2: 'LN-V003-14', col3: 'สำนักงานใหญ่', status: 'PASS' }
-        ]
-      }
+          { col1: '01290', col2: 'LN-V003-14', col3: 'สำนักงานใหญ่', status: 'PASS' },
+        ],
+      },
     };
-    return res.json({ success: true, design: fallbackDesign, errorNotice: err?.message, isFallback: true });
+    return res.json({
+      success: true,
+      design: fallbackDesign,
+      errorNotice: err instanceof Error ? err.message : String(err),
+      isFallback: true,
+    });
   }
 });
 
