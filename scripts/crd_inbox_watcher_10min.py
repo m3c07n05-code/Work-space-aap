@@ -99,7 +99,8 @@ def fetch_doc_content() -> str:
             text=True,
             timeout=45,
             shell=use_shell,
-            env=custom_env
+            env=custom_env,
+            creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
         )
         if proc.returncode == 0:
             if not proc.stdout:
