@@ -19,12 +19,13 @@ import { ExportCodeModal } from './components/ExportCodeModal';
 import { AICommandDispatcher } from './components/AICommandDispatcher';
 import { LiquidNavbar, NimbusIcons, LiquidNavItem } from './components/ui/liquid-glass-navbar';
 import { Work4PrintStudio } from './components/Work4PrintStudio';
+import { Work1AndBackupStudio } from './components/Work1AndBackupStudio';
 
 import { backendGateway } from './services/backendGateway';
 import { GatewayConfig, ManifestModule } from './types';
 import { Terminal, ArrowLeft } from 'lucide-react';
 
-export type ActiveTabType = 'overview' | 'work4' | 'scope-builder' | 'ai-studio' | 'stop-gates' | 'gascode' | 'proposed-work';
+export type ActiveTabType = 'overview' | 'work1' | 'work4' | 'scope-builder' | 'ai-studio' | 'stop-gates' | 'gascode' | 'proposed-work';
 
 
 export default function App() {
@@ -168,6 +169,7 @@ export default function App() {
               <span>← กลับหน้าหลัก (Hub)</span>
             </button>
             <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
+              {activeTab === 'work1' && 'WORK 1: ตาราง 13 คอลัมน์ & สำรอง Drive 3D'}
               {activeTab === 'work4' && 'WORK 4: ระบบพิมพ์หนังสือบอกกล่าว A6'}
               {activeTab === 'ai-studio' && 'Google AI UI Studio'}
               {activeTab === 'scope-builder' && 'Scope Builder'}
@@ -190,6 +192,11 @@ export default function App() {
             onOpenExportModal={() => setIsExportModalOpen(true)}
             theme={theme}
           />
+        )}
+
+        {/* View: WORK 1 13-Column Report & CRD_WORK1_9_BACKUP 3D GlassFolder */}
+        {activeTab === 'work1' && (
+          <Work1AndBackupStudio theme={theme} />
         )}
 
         {/* View: WORK 4 Direct-RPT Print & Preview Studio (A6 Edition) */}

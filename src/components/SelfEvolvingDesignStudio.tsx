@@ -86,6 +86,10 @@ export const SelfEvolvingDesignStudio: React.FC<SelfEvolvingDesignStudioProps> =
     setIsScanningCode(true);
     try {
       const res = await fetch('/api/ai/codebase-summary');
+      const contentType = res.headers.get('content-type') || '';
+      if (!res.ok || !contentType.includes('application/json')) {
+        throw new Error('Static fallback mode');
+      }
       const data = await res.json();
       if (data.success) {
         setCodeSummary(data.codebase);
@@ -122,6 +126,10 @@ export const SelfEvolvingDesignStudio: React.FC<SelfEvolvingDesignStudioProps> =
         }),
       });
 
+      const contentType = response.headers.get('content-type') || '';
+      if (!response.ok || !contentType.includes('application/json')) {
+        throw new Error('Static fallback mode');
+      }
       const data = await response.json();
       if (data.success && data.design) {
         setDesignResult(data.design);
