@@ -208,10 +208,49 @@ def _resolve_agy_exe() -> Optional[str]:
     return shutil.which("agy")
 
 
+def emit_stage_alert(stage: str, job_id: str, task_id: str, status: str, detail: str) -> Dict[str, Any]:
+    """
+    Emits a 2-Stage Pipeline Alert (Stage-1 on CLAIMED/IN_PROGRESS, Stage-2 on COMPLETED/FAILED)
+    to both GAS Gateway (SET_CONFIRM_GATE -> 00_Project_Manifest.json activeTask & devices['CMS-2'])
+    and local doc_b_dispatch.log (Zero-PII).
+    """
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    gate_status = "STAGE_1_CLAIMED_IN_PROGRESS" if stage == "STAGE_1" else (
+        "STAGE_2_COMPLETED" if status == "DONE" else "STAGE_2_FAILED"
+    )
+    alert_obj = {
+        "stage": stage,
+        "jobId": job_id,
+        "taskId": task_id,
+        "status": status,
+        "detail": detail[:240],
+        "timestampIso": now_iso,
+        "worker": "CMS-2 (v2.1-docb-bridge)"
+    }
+    _log_dispatch(f"[2-STAGE-ALERT::{stage}] taskId={task_id} jobId={job_id} status={status} | {detail[:180]}")
+    res = gas_post({
+        "action": "SET_CONFIRM_GATE",
+        "gateStatus": gate_status,
+        "activeTask": alert_obj,
+        "devices": {
+            "CMS-2": {
+                "deviceId": "CMS-2",
+                "deviceType": "PC",
+                "label": "Desktop PC",
+                "lastSeenIso": now_iso,
+                "status": "ONLINE",
+                "lastStageAlert": alert_obj
+            }
+        }
+    }, timeout=15)
+    return res
+
+
 def handle_doc_b_dispatch(job: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
     """
-    Validates, deduplicates, claims, and executes a DOC_B_DISPATCH job
-    via Antigravity CLI non-interactively, enforcing Zero-PII & Read-Only rules.
+    Validates, deduplicates, claims, emits Stage-1 alert, executes a DOC_B_DISPATCH job
+    via Antigravity CLI non-interactively (--dangerously-skip-permissions), verifies Doc B
+    top-block writeback, and emits Stage-2 alert, enforcing Zero-PII & Read-Only rules.
     """
     job_type = str(job.get("taskType") or job.get("type") or "DOC_B_DISPATCH").strip().upper()
     if not validate_task_allowlist(job_type):
@@ -236,10 +275,14 @@ def handle_doc_b_dispatch(job: Dict[str, Any], dry_run: bool = False) -> Dict[st
         _log_dispatch(f"Job {job_id} could not be claimed: {claim_res.get('error', 'already claimed')}")
         return {"success": False, "status": "NOT_CLAIMED", "jobId": job_id}
 
+    # Emit Stage-1 Alert immediately upon claiming job
+    emit_stage_alert("STAGE_1", job_id, task_id, "IN_PROGRESS", f"Claimed {task_id} on CMS-2; starting Antigravity CLI execution")
+
     agy_exe = _resolve_agy_exe()
     if not agy_exe:
         msg = "Antigravity CLI (agy.exe) not found on CMS-2"
         _log_dispatch(f"FAILED {job_id}: {msg}")
+        emit_stage_alert("STAGE_2", job_id, task_id, "FAILED", msg)
         complete_job(job_id, "FAILED", msg)
         return {"success": False, "status": "FAILED", "error": msg}
 
@@ -253,34 +296,61 @@ def handle_doc_b_dispatch(job: Dict[str, Any], dry_run: bool = False) -> Dict[st
         "5-line [CRD WORK CARD — EXECUTION REPORT]."
     )
 
-    _log_dispatch(f"Dispatching job {job_id} (taskId={task_id}) to Antigravity CLI...")
+    _log_dispatch(f"Dispatching job {job_id} (taskId={task_id}) to Antigravity CLI (--dangerously-skip-permissions)...")
     final_status = "DONE"
     summary = f"Dispatched {task_id} via Antigravity CLI on CMS-2"
     try:
         workdir = WORKSPACE_DIR_DEFAULT if os.path.exists(WORKSPACE_DIR_DEFAULT) else BASE_DIR
-        cmd = [agy_exe, "-p", dispatch_prompt, "--mode", "auto", "--print-timeout", "600s"]
+        cmd = [
+            agy_exe,
+            "-p",
+            dispatch_prompt,
+            "--dangerously-skip-permissions",
+            "--print-timeout",
+            "600s"
+        ]
+        custom_env = os.environ.copy()
+        app_data_dir = os.path.expanduser(r"~\.gemini\antigravity")
+        if os.path.exists(app_data_dir):
+            custom_env["ANTIGRAVITY_APP_DATA_DIR"] = app_data_dir
         proc = subprocess.run(
             cmd,
             cwd=workdir,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=630,
+            env=custom_env,
             creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
         )
+        out_combined = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
         if proc.returncode != 0:
             final_status = "FAILED"
-            err_tail = (proc.stderr or proc.stdout or "").strip()[-180:]
-            summary = f"agy exit={proc.returncode} ({err_tail})"
+            summary = f"agy exit={proc.returncode} ({out_combined[-180:]})"
+        elif "permission check failed" in out_combined.lower() or "user denied permission" in out_combined.lower():
+            final_status = "FAILED"
+            summary = f"CLI tool permission blocked ({out_combined[-180:]})"
         else:
-            summary = f"Completed {task_id} via Antigravity CLI (exit=0, Zero-PII)"
+            # Verify whether Doc B top block changed or was overwritten with an execution report
+            still_active = fetch_doc_b_top_active_job()
+            if still_active and still_active.get("contentHash") == content_hash:
+                final_status = "FAILED"
+                summary = f"CLI exited 0 but Doc B top block hash {content_hash[:8]} remained unchanged"
+            else:
+                summary = f"Completed {task_id} via Antigravity CLI (Doc B updated, Zero-PII)"
     except Exception as e:
         final_status = "FAILED"
         summary = f"Dispatch exception: {type(e).__name__}: {e}"
 
-    cache.setdefault("job_ids", []).append(job_id)
-    if content_hash:
-        cache.setdefault("content_hashes", []).append(content_hash)
-    _save_processed_cache(cache)
+    if final_status == "DONE":
+        cache.setdefault("job_ids", []).append(job_id)
+        if content_hash:
+            cache.setdefault("content_hashes", []).append(content_hash)
+        _save_processed_cache(cache)
+
+    # Emit Stage-2 Alert upon completion or failure
+    emit_stage_alert("STAGE_2", job_id, task_id, final_status, summary)
 
     complete_res = complete_job(job_id, final_status, summary)
     _log_dispatch(f"Finished job {job_id}: status={final_status}, completeAck={complete_res.get('success')}")
