@@ -508,14 +508,63 @@ def current_run_url() -> str:
 
 def extract_callback_directive(prompt_text: str, explicit_callback: str = "") -> str:
     """Extracts an optional follow-up return script command from explicit input or CALLBACK: line."""
-    if str(explicit_callback or "").strip():
-        return str(explicit_callback).strip()[:500]
+    raw_explicit = str(explicit_callback or "").strip()
+    if raw_explicit and raw_explicit.lower() not in {"_no response_", "none", "ไม่มี", "-"}:
+        return raw_explicit[:500]
     match = re.search(
         r"^(?:CALLBACK|RETURN_SCRIPT|NEXT_STEP)\s*:\s*(.+)$",
         str(prompt_text or ""),
         flags=re.IGNORECASE | re.MULTILINE,
     )
-    return match.group(1).strip()[:500] if match else ""
+    if match:
+        val = match.group(1).strip()
+        if val and val.lower() not in {"_no response_", "none", "ไม่มี", "-"}:
+            return val[:500]
+    return ""
+
+
+def parse_github_issue_inputs(issue_title: str, issue_body: str) -> Tuple[str, str]:
+    """
+    Parses both plain GitHub Issues and GitHub Issue Forms (.github/ISSUE_TEMPLATE/crd_cloud_job.yml).
+    Returns (effective_prompt, parsed_callback_prompt).
+    """
+    clean_title = re.sub(r"^\[CRD\]\s*", "", str(issue_title or "").strip(), flags=re.IGNORECASE).strip()
+    raw_body = str(issue_body or "").strip()
+    if not raw_body:
+        return clean_title, ""
+
+    # Check if formatted by GitHub Issue Form (### Heading sections)
+    if re.search(r"^###\s+", raw_body, flags=re.MULTILINE):
+        sections = re.split(r"^###\s+", raw_body, flags=re.MULTILINE)
+        parsed_prompt = ""
+        parsed_cb = ""
+        extra_parts: List[str] = []
+        for sec in sections:
+            sec = sec.strip()
+            if not sec:
+                continue
+            lines = sec.splitlines()
+            heading = lines[0].strip().lower()
+            val = "\n".join(lines[1:]).strip()
+            if val.lower() in {"_no response_", "none", ""}:
+                continue
+            if any(k in heading for k in ("คำสั่งรันกลับ", "callback", "return_script")):
+                if val.lower() not in {"ไม่มี", "-"}:
+                    parsed_cb = val[:500]
+            elif any(k in heading for k in ("คำสั่งงาน", "prompt", "instruction")):
+                parsed_prompt = val
+            else:
+                extra_parts.append(val)
+        combined = "\n".join(p for p in [parsed_prompt or clean_title, *extra_parts] if p).strip()
+        return combined or clean_title, parsed_cb
+
+    cb_from_body = extract_callback_directive(raw_body)
+    cleaned_lines = [
+        ln for ln in raw_body.splitlines()
+        if ln.strip().lower() != "_no response_"
+    ]
+    combined_plain = "\n".join(p for p in [clean_title, "\n".join(cleaned_lines).strip()] if p).strip()
+    return combined_plain, cb_from_body
 
 
 def post_github_issue_comment(
@@ -814,9 +863,12 @@ def run_cloud_cycle(
     gh_repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
 
     effective_prompt = direct_prompt.strip()
+    effective_callback = callback_prompt.strip()
     if issue_number and not effective_prompt:
-        clean_title = re.sub(r"^\[CRD\]\s*", "", issue_title.strip(), flags=re.IGNORECASE)
-        effective_prompt = "\n".join(p for p in [clean_title, issue_body.strip()] if p).strip()
+        parsed_prompt, parsed_cb = parse_github_issue_inputs(issue_title, issue_body)
+        effective_prompt = parsed_prompt
+        if not effective_callback and parsed_cb:
+            effective_callback = parsed_cb
 
     if effective_prompt:
         mode = "GITHUB_ISSUE" if issue_number else "DIRECT_PROMPT"
@@ -854,13 +906,14 @@ def run_cloud_cycle(
                 job=synthetic_job,
                 exec_res=exec_res,
                 claim_info=claim_info,
-                callback_prompt=callback_prompt,
+                callback_prompt=effective_callback,
                 run_url=run_url,
             )
         )
         issue_done_comment: Dict[str, Any] = {}
         if issue_number:
-            cb_status = cb_bundle.get("callback", {}).get("status", "NONE")
+            cb_obj = cb_bundle.get("callback") or {}
+            cb_status = cb_obj.get("status", "NONE")
             comment_lines = [
                 f"{'✅' if exec_res.get('status') == 'DONE' else '❌'} **ผลรัน Cloud Runner (`{job_id}`): `{exec_res.get('status')}`**",
                 f"- **Handler:** `{exec_res.get('handler', 'AUTO')}` | **Lane:** `{exec_res.get('executionLane', 'CLOUD_ONLY')}` | **Paper:** `0` (`NO_AUTO_PRINT`)",
@@ -868,8 +921,12 @@ def run_cloud_cycle(
                 f"- **แนะนำ:** {exec_res.get('advisor', '')}",
                 f"- **Return Callback:** `{cb_status}`",
             ]
+            if isinstance(cb_obj.get("execution"), dict) and cb_obj["execution"].get("summary"):
+                comment_lines.append(f"  - 🔁 **ผลสคริปต์รันกลับ:** {cb_obj['execution']['summary']}")
+            if exec_res.get("output_pdf"):
+                comment_lines.append(f"- **ไฟล์เอาต์พุตใน Artifact:** `{exec_res['output_pdf']}`")
             if run_url:
-                comment_lines.append(f"- **Run & Artifact:** {run_url}")
+                comment_lines.append(f"- **เปิดดูและดาวน์โหลดไฟล์ (Run & Artifact):** {run_url}")
             issue_done_comment = post_github_issue_comment(
                 issue_number,
                 "\n".join(comment_lines),
@@ -1228,7 +1285,18 @@ def run_self_test() -> Dict[str, Any]:
             callback_prompt="ตรวจระบบ",
         )
         assert guarded["callback"]["status"] == "LOOP_GUARD_BLOCKED"
-        checks += 4
+        # GitHub Issue Form parsing (_No response_ stripped + callback extracted)
+        p1, cb1 = parse_github_issue_inputs(
+            "[CRD] ทดสอบใบนำส่ง A4",
+            "### คำสั่งงาน (Prompt)\n\nสร้างใบนำส่ง A4\n\n### คำสั่งรันกลับหลังงานเสร็จ (Callback - ถ้ามี)\n\n_No response_",
+        )
+        assert p1 == "สร้างใบนำส่ง A4" and cb1 == ""
+        p2, cb2 = parse_github_issue_inputs(
+            "[CRD] ทดสอบ",
+            "### คำสั่งงาน (Prompt)\n\nสร้างใบนำส่ง A4\n\n### คำสั่งรันกลับหลังงานเสร็จ (Callback - ถ้ามี)\n\nตรวจระบบ parity SHA-256",
+        )
+        assert p2 == "สร้างใบนำส่ง A4" and cb2 == "ตรวจระบบ parity SHA-256"
+        checks += 6
     finally:
         srv.shutdown()
         srv.server_close()

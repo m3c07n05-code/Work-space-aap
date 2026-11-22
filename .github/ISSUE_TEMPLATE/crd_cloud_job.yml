@@ -1,0 +1,24 @@
+name: ⚡ สั่งงาน CRD Cloud Runner (1-Tap)
+description: กดเลือกและพิมพ์คำสั่งงานเพื่อรันบน GitHub Cloud Runner อัตโนมัติ (Paper=0, Zero-PII)
+title: "[CRD] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        พิมพ์คำสั่งด้านล่างแล้วกด **Submit new issue** — ระบบจะรับงาน (`ACK`), รันบนคลาวด์, และคอมเมนต์ผลลัพธ์ + ลิงก์โหลดไฟล์กลับมาในหน้านี้ทันที
+  - type: textarea
+    id: prompt
+    attributes:
+      label: คำสั่งงาน (Prompt)
+      description: พิมพ์สิ่งที่ต้องการ เช่น สร้างใบนำส่ง WORK 4 ขนาด A4 ด้วยข้อมูลสมมติ 3 รายการ หรือ ตรวจระยะพิมพ์ A6
+      placeholder: สร้างใบนำส่ง WORK 4 ขนาด A4 ด้วยข้อมูลสมมติ 3 รายการ
+    validations:
+      required: true
+  - type: input
+    id: callback
+    attributes:
+      label: คำสั่งรันกลับหลังงานเสร็จ (Callback - ถ้ามี)
+      description: ปล่อยว่างได้ หรือระบุงานขั้นถัดไป เช่น ตรวจระบบ parity SHA-256
+      placeholder: ตรวจระบบ parity SHA-256 และสถานะ Cloud Runner
+    validations:
+      required: false
