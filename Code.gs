@@ -9,15 +9,28 @@ const DOC_B_ID = '1UL_maGIJiMm8N6f0sUIYwAkFsqpHLz4HrZbkQZTZn7Q';
 const ONLINE_WINDOW_MS = 3 * 60 * 1000; // 3 minutes
 const MAX_PENDING_JOBS = 50;
 const MAX_COMPLETED_JOBS = 50;
+const DEFAULT_GH_REPO = 'm3c07n05-code/Work-space-aap';
 
 function doGet(e) {
   try {
     const params = (e && e.parameter) ? e.parameter : {};
+    const rawAction = String(params.action || '').trim();
+    const format = String(params.format || '').trim().toLowerCase();
+
+    // Serve 1-box Mobile Web Dispatcher UI when opened directly in browser without API action
+    if (params.ui === '1' || (!rawAction && format !== 'json')) {
+      const endpointUrl = ScriptApp.getService().getUrl();
+      return HtmlService.createHtmlOutput(renderMobileDispatcherHtml_(endpointUrl))
+        .setTitle('CRD Cloud Auto-Runner')
+        .addMetaTag('viewport', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover')
+        .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    }
+
     if (!verifyToken_(params.token || params.gatewayToken || params.CRD_GATEWAY_TOKEN)) {
       return jsonResponse_({ success: false, error: 'Unauthorized: Invalid gateway token' });
     }
 
-    const action = String(params.action || 'PING').trim().toUpperCase();
+    const action = rawAction.toUpperCase() || 'PING';
     if (action === 'GET_STATE' || action === 'GET_MANIFEST' || action === 'READ_MANIFEST') {
       const manifest = loadOrCreateManifest_();
       return jsonResponse_({
@@ -31,7 +44,7 @@ function doGet(e) {
 
     if (action === 'GET_PENDING_JOBS') {
       const manifest = loadOrCreateManifest_();
-      const pendingJobs = getPendingJobsList_(manifest);
+      const pendingJobs = getPendingJobsList_(manifest, params.lane, params.workerId);
       return jsonResponse_({
         success: true,
         action: 'GET_PENDING_JOBS',
@@ -122,7 +135,7 @@ function doPost(e) {
 
     if (action === 'GET_PENDING_JOBS') {
       const manifest = loadOrCreateManifest_(payload.workspaceId, payload.targetManifest);
-      const pendingJobs = getPendingJobsList_(manifest);
+      const pendingJobs = getPendingJobsList_(manifest, payload.lane, payload.workerId);
       return jsonResponse_({
         success: true,
         action: 'GET_PENDING_JOBS',
@@ -369,27 +382,36 @@ function doPost(e) {
         });
       }
 
-      // 8. Persistent Job Queue (Doc-B-to-GAS Auto-Queue Bridge)
+      // 8. Persistent Job Queue (Doc-B-to-GAS Auto-Queue Bridge + Cloud Auto-Router)
       if (action === 'SUBMIT_JOB') {
+        const promptText = String(payload.promptText || payload.description || payload.title || '');
+        const routedLane = classifyExecutionLane_(promptText, payload.executionLane || payload.lane);
         const enqueued = enqueueJob_(manifest, {
           jobId: payload.jobId,
-          type: payload.type || payload.taskType || 'DOC_B_DISPATCH',
+          type: payload.type || payload.taskType || (routedLane === 'CLOUD_ONLY' ? 'CLOUD_DISPATCH' : 'DOC_B_DISPATCH'),
           taskId: payload.taskId || '',
-          title: payload.title || 'Queued Job',
+          title: payload.title || promptText.slice(0, 120) || 'Queued Job',
           source: payload.source || 'API_SUBMIT',
           docId: payload.docId || DOC_B_ID,
           contentHash: payload.contentHash || '',
-          promptText: payload.promptText || ''
+          promptText: promptText,
+          executionLane: routedLane
         }, nowIso);
         if (enqueued.inserted) {
           saveManifest_(manifest, payload.workspaceId, payload.targetManifest);
+        }
+        let dispatchResult = { triggered: false, status: 'SKIPPED_CMS2_LOCAL' };
+        if (enqueued.job.executionLane === 'CLOUD_ONLY') {
+          dispatchResult = triggerGitHubCloudRunner_(enqueued.job);
         }
         return jsonResponse_({
           success: true,
           action: 'SUBMIT_JOB',
           jobId: enqueued.job.jobId,
           status: enqueued.job.status,
+          executionLane: enqueued.job.executionLane,
           deduplicated: !enqueued.inserted,
+          cloudDispatch: dispatchResult,
           job: enqueued.job,
           timestamp: nowIso
         });
@@ -436,12 +458,15 @@ function doPost(e) {
         const targetJobId = String(payload.jobId || '');
         const finalStatus = String(payload.status || 'DONE').toUpperCase();
         const summary = String(payload.summary || '').slice(0, 300);
+        const advisorNote = String(payload.advisorNote || '').slice(0, 300);
         const idx = manifest.pendingJobs.findIndex(function(j) { return j && j.jobId === targetJobId; });
         if (idx >= 0) {
           const finishedJob = Object.assign({}, manifest.pendingJobs[idx], {
             status: finalStatus,
             completedAtIso: nowIso,
-            summary: summary
+            summary: summary,
+            advisorNote: advisorNote,
+            paperPrinted: Number(payload.paperPrinted || 0)
           });
           manifest.pendingJobs.splice(idx, 1);
           manifest.completedJobs.unshift(finishedJob);
@@ -533,21 +558,27 @@ function pollDocBToQueue() {
 
     const taskIdMatch = topBlock.text.match(/TASK_ID\s*:\s*([A-Za-z0-9_\-]+)/i);
     const taskId = taskIdMatch ? taskIdMatch[1] : ('DOCB-' + contentHash.slice(0, 8));
+    const routedLane = classifyExecutionLane_(topBlock.text);
 
     const enqueued = enqueueJob_(manifest, {
-      type: 'DOC_B_DISPATCH',
+      type: routedLane === 'CLOUD_ONLY' ? 'CLOUD_DISPATCH' : 'DOC_B_DISPATCH',
       taskId: taskId,
       title: topBlock.heading || 'Doc B Active Task',
       source: 'DOC_B_POLL_1MIN',
       docId: DOC_B_ID,
       contentHash: contentHash,
-      promptText: topBlock.text.slice(0, 4000)
+      promptText: topBlock.text.slice(0, 4000),
+      executionLane: routedLane
     }, nowIso);
 
+    let cloudDispatch = { triggered: false, status: 'SKIPPED' };
     if (enqueued.inserted) {
       manifest.docBState.lastQueuedHash = contentHash;
       manifest.docBState.lastQueuedJobId = enqueued.job.jobId;
       manifest.docBState.lastQueuedIso = nowIso;
+      if (enqueued.job.executionLane === 'CLOUD_ONLY') {
+        cloudDispatch = triggerGitHubCloudRunner_(enqueued.job);
+      }
     }
 
     saveManifest_(manifest);
@@ -557,6 +588,8 @@ function pollDocBToQueue() {
       deduplicated: !enqueued.inserted,
       jobId: enqueued.job.jobId,
       taskId: taskId,
+      executionLane: enqueued.job.executionLane,
+      cloudDispatch: cloudDispatch,
       contentHash: contentHash,
       polledAtIso: nowIso
     };
@@ -630,22 +663,86 @@ function readDocBTopBlock_(docId) {
 
 function isDocBTopBlockActive_(topText) {
   if (!topText) return false;
-  const statusMatch = topText.match(/STATUS\s*:\s*([^\r\n]+)/i);
+  const normalized = String(topText).replace(/\*\*/g, '');
+  const statusMatch = normalized.match(/STATUS\s*:\s*([^\r\n|]+)/i);
   if (statusMatch) {
     const statusUpper = statusMatch[1].toUpperCase();
     if (/(PAUSED|COMPLETED|DONE|BLOCKED|CANCELLED|HOLD|SKIPPED|FINISHED|FAILED|EXECUTION REPORT)/.test(statusUpper)) {
       return false;
     }
-    if (/\b(ACTIVE|READY FOR AGENT EXECUTION|QUEUED|EXECUTE NOW|EXECUTE IMMEDIATELY|OWNER APPROVED|PENDING EXECUTION|EXECUTE DIRECTLY)\b/.test(statusUpper)) {
+    if (/\b(ACTIVE|READY|READY FOR AGENT EXECUTION|QUEUED|EXECUTE NOW|EXECUTE IMMEDIATELY|OWNER APPROVED|PENDING EXECUTION|EXECUTE DIRECTLY)\b/.test(statusUpper)) {
       return true;
     }
     return false;
   }
-  const firstLine = (topText.split('\n')[0] || '').trim();
-  if (/^\[(ACTIVE TASK|CRD TASK DISPATCH|CRD UNIFIED|ANTIGRAVITY RUNBOOK)/i.test(firstLine) && !/EXECUTION REPORT/i.test(firstLine) && !/(STATUS\s*:\s*(PAUSED|COMPLETED|DONE|BLOCKED|CANCELLED))/i.test(topText)) {
+  const firstLine = (normalized.split('\n')[0] || '').trim();
+  if (/^\[?(ACTIVE TASK|CRD\s+[A-Z0-9\-]+\s+DISPATCH|CRD TASK DISPATCH|CRD UNIFIED|ANTIGRAVITY RUNBOOK)/i.test(firstLine) && !/EXECUTION REPORT/i.test(firstLine) && !/(STATUS\s*:\s*(PAUSED|COMPLETED|DONE|BLOCKED|CANCELLED))/i.test(normalized)) {
     return true;
   }
   return false;
+}
+
+function classifyExecutionLane_(promptText, explicitLane) {
+  const rawExplicit = String(explicitLane || '').trim().toUpperCase();
+  const textLower = String(promptText || '').toLowerCase();
+
+  if (/execution_lane\s*:\s*cloud_only/.test(textLower)) return 'CLOUD_ONLY';
+  if (/execution_lane\s*:\s*cms2_local/.test(textLower)) return 'CMS2_LOCAL';
+  if (rawExplicit === 'CLOUD_ONLY' || rawExplicit === 'CMS2_LOCAL') return rawExplicit;
+
+  const localHints = [
+    'd:\\coop', 'viewreport', '00_master_source', 's:\\2026',
+    'c:\\users\\natee.yan', 'excel.application', 'viewcrreport',
+    'ลิ้นชัก', 'เครื่องพิมพ์จริง', 'ปริ้นจริง', 'สั่งพิมพ์จริง', 'cms-2 only'
+  ];
+  for (let i = 0; i < localHints.length; i++) {
+    if (textLower.indexOf(localHints[i]) !== -1) {
+      return 'CMS2_LOCAL';
+    }
+  }
+  return 'CLOUD_ONLY';
+}
+
+function triggerGitHubCloudRunner_(job) {
+  const props = PropertiesService.getScriptProperties();
+  const ghPat = String(props.getProperty('GH_PAT') || '').trim();
+  if (!ghPat) {
+    return { triggered: false, status: 'NOT_CONFIGURED', note: 'Set GH_PAT in GAS Script Properties to enable instant dispatch' };
+  }
+  const repo = String(props.getProperty('GH_REPO') || DEFAULT_GH_REPO).trim();
+  const url = 'https://api.github.com/repos/' + repo + '/dispatches';
+  const payload = {
+    event_type: 'crd-cloud-job',
+    client_payload: {
+      jobId: String(job.jobId || ''),
+      taskId: String(job.taskId || ''),
+      title: String(job.title || '').slice(0, 180),
+      executionLane: String(job.executionLane || 'CLOUD_ONLY'),
+      promptText: String(job.promptText || '').slice(0, 3500)
+    }
+  };
+  try {
+    const resp = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: {
+        Authorization: 'Bearer ' + ghPat,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'CRD-GAS-Dispatcher/1.0'
+      },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+    const code = resp.getResponseCode();
+    return {
+      triggered: code === 204 || code === 200 || code === 201,
+      status: code === 204 ? 'DISPATCHED' : ('HTTP_' + code),
+      repo: repo
+    };
+  } catch (err) {
+    return { triggered: false, status: 'FETCH_ERROR', error: String(err) };
+  }
 }
 
 function enqueueJob_(manifest, spec, nowIso) {
@@ -665,7 +762,9 @@ function enqueueJob_(manifest, spec, nowIso) {
     if (dupDone) return { inserted: false, job: dupDone };
   }
 
-  const jobId = String(spec.jobId || ('DOCB-' + Date.now() + '-' + (contentHash ? contentHash.slice(0, 6) : Utilities.getUuid().slice(0, 6))));
+  const promptStr = String(spec.promptText || '').slice(0, 4000);
+  const executionLane = classifyExecutionLane_(promptStr, spec.executionLane);
+  const jobId = String(spec.jobId || ((executionLane === 'CLOUD_ONLY' ? 'CLOUD-' : 'DOCB-') + Date.now() + '-' + (contentHash ? contentHash.slice(0, 6) : Utilities.getUuid().slice(0, 6))));
   const newJob = {
     jobId: jobId,
     type: String(spec.type || 'DOC_B_DISPATCH'),
@@ -673,10 +772,11 @@ function enqueueJob_(manifest, spec, nowIso) {
     taskId: String(spec.taskId || ''),
     title: String(spec.title || 'Doc B Dispatch').slice(0, 180),
     status: 'PENDING',
+    executionLane: executionLane,
     source: String(spec.source || 'DOC_B_POLL_1MIN'),
     docId: String(spec.docId || DOC_B_ID),
     contentHash: contentHash,
-    promptText: String(spec.promptText || '').slice(0, 4000),
+    promptText: promptStr,
     createdAtIso: nowIso
   };
 
@@ -688,9 +788,18 @@ function enqueueJob_(manifest, spec, nowIso) {
   return { inserted: true, job: newJob };
 }
 
-function getPendingJobsList_(manifest) {
+function getPendingJobsList_(manifest, laneFilter, workerId) {
   ensureManifestFields_(manifest);
-  return manifest.pendingJobs.filter(function(j) { return j && j.status === 'PENDING'; });
+  const targetLane = String(laneFilter || '').trim().toUpperCase();
+  const workerUpper = String(workerId || '').trim().toUpperCase();
+  return manifest.pendingJobs.filter(function(j) {
+    if (!j || j.status !== 'PENDING') return false;
+    const jobLane = String(j.executionLane || classifyExecutionLane_(j.promptText || j.title || '', '')).toUpperCase();
+    if (targetLane && jobLane !== targetLane) return false;
+    if (!targetLane && workerUpper.indexOf('CMS-2') !== -1 && jobLane === 'CLOUD_ONLY') return false;
+    if (!targetLane && workerUpper.indexOf('CLOUD') !== -1 && jobLane === 'CMS2_LOCAL') return false;
+    return true;
+  });
 }
 
 function computeSha256Hex_(inputStr) {
@@ -720,9 +829,9 @@ function withScriptLock_(fn) {
 
 function handleDeviceHeartbeat_(manifest, payload, nowIso) {
   const rawType = String(payload.deviceType || 'PC').toUpperCase();
-  const deviceType = (rawType === 'MOBILE') ? 'MOBILE' : 'PC';
+  const deviceType = (rawType === 'MOBILE' || rawType === 'CLOUD') ? rawType : 'PC';
   const deviceId = String(payload.deviceId || (deviceType.toLowerCase() + '-default')).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40);
-  const label = String(payload.label || (deviceType === 'MOBILE' ? 'Mobile Client' : 'Desktop PC')).slice(0, 50);
+  const label = String(payload.label || (deviceType === 'MOBILE' ? 'Mobile Client' : (deviceType === 'CLOUD' ? 'Cloud Runner' : 'Desktop PC'))).slice(0, 50);
 
   const prev = (manifest.devices[deviceId] && typeof manifest.devices[deviceId] === 'object') ? manifest.devices[deviceId] : {};
   const entry = Object.assign({}, prev, {
@@ -748,8 +857,10 @@ function computeSyncSummary_(devicesMap) {
   const nowMs = Date.now();
   let pcOnline = false;
   let mobileOnline = false;
+  let cloudOnline = false;
   let lastPcIso = null;
   let lastMobileIso = null;
+  let lastCloudIso = null;
 
   Object.keys(devicesMap || {}).forEach(function(id) {
     const d = devicesMap[id];
@@ -763,15 +874,20 @@ function computeSyncSummary_(devicesMap) {
     } else if (d.deviceType === 'MOBILE') {
       if (!lastMobileIso || d.lastSeenIso > lastMobileIso) lastMobileIso = d.lastSeenIso;
       if (isOnline) mobileOnline = true;
+    } else if (d.deviceType === 'CLOUD') {
+      if (!lastCloudIso || d.lastSeenIso > lastCloudIso) lastCloudIso = d.lastSeenIso;
+      if (isOnline) cloudOnline = true;
     }
   });
 
   return {
     pcOnline: pcOnline,
     mobileOnline: mobileOnline,
+    cloudOnline: cloudOnline,
     bothOnline: pcOnline && mobileOnline,
     lastPcIso: lastPcIso,
-    lastMobileIso: lastMobileIso
+    lastMobileIso: lastMobileIso,
+    lastCloudIso: lastCloudIso
   };
 }
 
@@ -839,3 +955,84 @@ function jsonResponse_(obj) {
     .createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
 }
+
+function renderMobileDispatcherHtml_(endpointUrl) {
+  const safeEndpoint = JSON.stringify(String(endpointUrl || ''));
+  return [
+    '<!DOCTYPE html><html lang="th"><head><meta charset="UTF-8">',
+    '<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">',
+    '<title>CRD Cloud Auto-Runner</title>',
+    '<meta name="apple-mobile-web-app-capable" content="yes">',
+    '<style>',
+    'body{margin:0;background:#0b1120;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:16px;max-width:560px;margin:auto}',
+    '.card{background:#131d32;border:1px solid #1e3a5f;border-radius:16px;padding:14px;margin-bottom:12px}',
+    'textarea,input{width:100%;box-sizing:border-box;background:#0f172a;color:#f8fafc;border:1px solid #334155;border-radius:10px;padding:10px;font-size:14px}',
+    'button{border:0;border-radius:10px;padding:10px 14px;font-weight:700;cursor:pointer;font-size:13px}',
+    '.btn-primary{background:linear-gradient(90deg,#2563eb,#06b6d4);color:#fff;width:100%;margin-top:8px}',
+    '.btn-chip{background:#1e293b;color:#7dd3fc;border:1px solid #334155;margin:4px 4px 0 0;font-size:11px;padding:6px 10px}',
+    '.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700}',
+    '.b-pending{background:#78350f;color:#fde68a}.b-done{background:#064e3b;color:#6ee7b7}.b-prog{background:#164e63;color:#67e8f9}',
+    '.job-item{padding:8px;border:1px solid #1e293b;border-radius:10px;margin-bottom:8px;background:#0f172a}',
+    '.job-head{display:flex;justify-content:space-between;align-items:center}',
+    '.job-title{color:#cbd5e1;margin:4px 0}',
+    '.job-lane{color:#38bdf8}',
+    '.job-sum{color:#34d399;font-size:11px}',
+    '.job-adv{color:#fbbf24;font-size:11px;margin-top:2px}',
+    '</style></head><body>',
+    '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center">',
+    '<div><b>⚡ CRD Cloud Auto-Runner</b><div style="font-size:11px;color:#94a3b8">สั่งช่องเดียว • ระบบเลือกเลนและปลุก Cloud ให้อัตโนมัติ</div></div>',
+    '<span id="connStatus" class="badge b-prog">READY</span></div></div>',
+    '<div class="card"><div style="font-size:12px;color:#94a3b8;margin-bottom:6px">รหัสเชื่อมต่อ (CRD_GATEWAY_TOKEN — จำไว้ในเครื่องครั้งเดียว)</div>',
+    '<input id="tok" type="password" placeholder="ใส่ Token ของ Gateway..." onchange="saveTok()"></div>',
+    '<div class="card"><div style="font-size:13px;font-weight:700;margin-bottom:6px">พิมพ์คำสั่งที่ต้องการให้ทำได้เลย</div>',
+    '<textarea id="cmd" rows="3" placeholder="เช่น สร้างใบนำส่ง WORK 4 ขนาด A4 ด้วยข้อมูลสมมติ 3 รายการ หรือ ตรวจระยะพิมพ์ A6"></textarea>',
+    '<div><button class="btn-chip" onclick="quick(\'สร้างใบนำส่ง WORK 4 ขนาด A4 ด้วยข้อมูลสมมติ 3 รายการ\')">📄 ใบนำส่ง A4</button>',
+    '<button class="btn-chip" onclick="quick(\'ตรวจระยะพิมพ์ A6 ใบฟ้าและปัญหาช่องว่าง\')">📏 ตรวจระยะ A6</button>',
+    '<button class="btn-chip" onclick="quick(\'ตรวจระบบ parity SHA-256 และสถานะ Cloud Runner\')">🛡️ ตรวจระบบ</button></div>',
+    '<button id="sendBtn" class="btn-primary" onclick="sendJob()">🚀 ส่งงานให้ระบบจัดการเอง</button></div>',
+    '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">',
+    '<b>📊 งานล่าสุด &amp; ความเห็นระบบ</b><button class="btn-chip" style="margin:0" onclick="refresh()">รีเฟรช</button></div>',
+    '<div id="feed" style="font-size:12px;color:#94a3b8">ใส่ Token แล้วกดรีเฟรชเพื่อดูคิวล่าสุด</div></div>',
+    '<script>',
+    'const EP = ' + safeEndpoint + ' || location.href.split("?")[0];',
+    'const tokEl = document.getElementById("tok"); tokEl.value = localStorage.getItem("crd_gw_tok") || "";',
+    'function saveTok(){ localStorage.setItem("crd_gw_tok", tokEl.value.trim()); refresh(); }',
+    'function quick(t){ document.getElementById("cmd").value = t; }',
+    'function esc(s){ return String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }',
+    'async function sendJob(){',
+    '  const t = tokEl.value.trim(); const p = document.getElementById("cmd").value.trim();',
+    '  if(!t){ alert("กรุณาใส่ Token ก่อน"); return; }',
+    '  if(!p){ alert("กรุณาพิมพ์คำสั่ง"); return; }',
+    '  const b = document.getElementById("sendBtn"); b.disabled = true; b.innerText = "⏳ กำลังส่งและปลุก Cloud Runner...";',
+    '  try{',
+    '    const r = await fetch(EP, { method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"}, body: JSON.stringify({ action:"SUBMIT_JOB", token:t, title:p.slice(0,90), promptText:p, source:"MOBILE_ONE_BOX" }) });',
+    '    const d = await r.json();',
+    '    if(d.success){ document.getElementById("cmd").value = ""; await refresh(); } else { alert(d.error || "Error"); }',
+    '  }catch(e){ alert("เชื่อมต่อไม่ได้: " + e); }',
+    '  finally{ b.disabled = false; b.innerText = "🚀 ส่งงานให้ระบบจัดการเอง"; }',
+    '}',
+    'async function refresh(){',
+    '  const t = tokEl.value.trim(); if(!t) return;',
+    '  try{',
+    '    const r = await fetch(EP + "?action=GET_MANIFEST&token=" + encodeURIComponent(t) + "&t=" + Date.now());',
+    '    const d = await r.json();',
+    '    if(!d.success){ document.getElementById("connStatus").innerText = d.error || "ERR"; return; }',
+    '    document.getElementById("connStatus").innerText = (d.syncSummary && d.syncSummary.cloudOnline) ? "CLOUD ONLINE" : "GATEWAY OK";',
+    '    const all = [].concat(d.manifest.pendingJobs || []).concat(d.manifest.completedJobs || []).slice(0, 8);',
+    '    document.getElementById("feed").innerHTML = all.map(function(j){',
+    '      const st = String(j.status || "PENDING").toUpperCase();',
+    '      const cls = st === "DONE" ? "b-done" : (st === "IN_PROGRESS" ? "b-prog" : "b-pending");',
+    '      return "<div class=\'job-item\'>"',
+    '        + "<div class=\'job-head\'><b>" + esc(j.jobId) + "</b><span class=\'badge " + cls + "\'>" + esc(st) + "</span></div>"',
+    '        + "<div class=\'job-title\'>" + esc(j.title) + " <span class=\'job-lane\'>[" + esc(j.executionLane || "AUTO") + "]</span></div>"',
+    '        + (j.summary ? "<div class=\'job-sum\'>ผลลัพธ์: " + esc(j.summary) + "</div>" : "")',
+    '        + (j.advisorNote ? "<div class=\'job-adv\'>💡 แนะนำ: " + esc(j.advisorNote) + "</div>" : "")',
+    '        + "</div>";',
+    '    }).join("") || "ยังไม่มีรายการ";',
+    '  }catch(e){}',
+    '}',
+    'if(tokEl.value) refresh(); setInterval(function(){ if(tokEl.value) refresh(); }, 5000);',
+    '</script></body></html>'
+  ].join('\n');
+}
+

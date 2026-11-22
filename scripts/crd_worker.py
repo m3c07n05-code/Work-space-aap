@@ -179,8 +179,8 @@ def _save_processed_cache(cache: Dict[str, Any]) -> None:
 
 
 def fetch_pending_jobs() -> Dict[str, Any]:
-    """Polls GAS Gateway GET_PENDING_JOBS."""
-    return gas_get("GET_PENDING_JOBS", timeout=15)
+    """Polls GAS Gateway GET_PENDING_JOBS for CMS2_LOCAL lane only."""
+    return gas_get("GET_PENDING_JOBS", params={"lane": "CMS2_LOCAL", "workerId": "CMS-2"}, timeout=15)
 
 
 def claim_job(job_id: str) -> Dict[str, Any]:
@@ -252,6 +252,12 @@ def handle_doc_b_dispatch(job: Dict[str, Any], dry_run: bool = False) -> Dict[st
     via Antigravity CLI non-interactively (--dangerously-skip-permissions), verifies Doc B
     top-block writeback, and emits Stage-2 alert, enforcing Zero-PII & Read-Only rules.
     """
+    execution_lane = str(job.get("executionLane") or "").strip().upper()
+    prompt_blob = str(job.get("promptText") or "")
+    if execution_lane == "CLOUD_ONLY" or re.search(r"EXECUTION_LANE\s*:\s*CLOUD_ONLY", prompt_blob, re.IGNORECASE):
+        _log_dispatch(f"Ignoring CLOUD_ONLY job {job.get('jobId')} on CMS-2")
+        return {"success": True, "status": "SKIPPED_CLOUD_ONLY", "jobId": job.get("jobId")}
+
     job_type = str(job.get("taskType") or job.get("type") or "DOC_B_DISPATCH").strip().upper()
     if not validate_task_allowlist(job_type):
         return {"success": False, "status": "REJECTED_ALLOWLIST", "jobId": job.get("jobId")}
@@ -416,6 +422,8 @@ def fetch_doc_b_top_active_job() -> Optional[Dict[str, Any]]:
 
     status_m = re.search(r'STATUS\s*:\s*([^\r\n]+)', top_block, re.IGNORECASE)
     if status_m and re.search(r'\b(PAUSED|COMPLETED|DONE|BLOCKED|CANCELLED|HOLD|SKIPPED|FINISHED|FAILED)\b', status_m.group(1), re.IGNORECASE):
+        return None
+    if re.search(r'EXECUTION\\?_LANE\s*:\s*CLOUD\\?_ONLY', top_block, re.IGNORECASE):
         return None
 
     is_active = bool(

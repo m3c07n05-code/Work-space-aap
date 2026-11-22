@@ -1,0 +1,81 @@
+name: CRD Cloud Runner (Autonomous Executor)
+
+on:
+  repository_dispatch:
+    types: [crd-cloud-job]
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "คำสั่งงานภาษาไทย/อังกฤษ (ปล่อยว่างเพื่อดึงคิว PENDING จาก GAS)"
+        required: false
+        default: ""
+      dry_run:
+        description: "ทดสอบแบบ Dry-Run (ไม่แก้คิวใน GAS)"
+        type: boolean
+        required: false
+        default: false
+  schedule:
+    - cron: "*/15 * * * *"
+
+concurrency:
+  group: crd-cloud-runner
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  cloud-runner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      CRD_GATEWAY_URL: ${{ vars.CRD_GATEWAY_URL || 'https://script.google.com/macros/s/AKfycbwTEboyfHQ0LzmrP0mtxWCYtrg13Jz5JqKpLVW-8Dtf3bWYqoc-ZoPObtZGjSlKriBU/exec' }}
+      CRD_GATEWAY_TOKEN: ${{ secrets.CRD_GATEWAY_TOKEN }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      CRD_EVENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
+      CRD_INPUT_PROMPT: ${{ github.event.inputs.prompt }}
+      CRD_INPUT_DRY_RUN: ${{ github.event.inputs.dry_run }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run Cloud Runner self-tests
+        run: python3 -B scripts/cloud_runner.py --self-test
+
+      - name: Execute Cloud Runner job cycle
+        run: |
+          if [ -n "$CRD_INPUT_PROMPT" ]; then
+            if [ "$CRD_INPUT_DRY_RUN" = "true" ]; then
+              python3 -B scripts/cloud_runner.py --prompt "$CRD_INPUT_PROMPT" --dry-run
+            else
+              python3 -B scripts/cloud_runner.py --prompt "$CRD_INPUT_PROMPT"
+            fi
+          elif [ -z "$CRD_GATEWAY_TOKEN" ]; then
+            echo "CRD_GATEWAY_TOKEN secret is not configured; running offline system audit."
+            python3 -B scripts/cloud_runner.py --offline-audit
+          else
+            if [ "$CRD_INPUT_DRY_RUN" = "true" ]; then
+              python3 -B scripts/cloud_runner.py --dry-run
+            else
+              python3 -B scripts/cloud_runner.py
+            fi
+          fi
+
+      - name: Upload Cloud Runner report & generated outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crd-cloud-runner-report-${{ github.run_id }}
+          path: |
+            runtime/cloud_runner_report.json
+            output/*.pdf
+            output/*.png
+          if-no-files-found: ignore
+          retention-days: 14
