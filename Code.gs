@@ -653,7 +653,19 @@ function pollDocBToQueue() {
       };
     }
 
-    const trackerResult = syncTrackerSheetToQueue_(manifest, nowIso);
+    let trackerResult = { skipped: true, reason: 'THROTTLED_5MIN' };
+    let shouldSyncTracker = true;
+    try {
+      const cache = CacheService.getScriptCache();
+      if (cache && cache.get('crd_tracker_5min_lock')) {
+        shouldSyncTracker = false;
+      } else if (cache) {
+        cache.put('crd_tracker_5min_lock', '1', 300);
+      }
+    } catch (_) {}
+    if (shouldSyncTracker) {
+      trackerResult = syncTrackerSheetToQueue_(manifest, nowIso);
+    }
     saveManifest_(manifest);
     return {
       success: true,
@@ -1255,7 +1267,7 @@ function renderMobileDispatcherHtml_(endpointUrl) {
     '    }).join("") || "ยังไม่มีรายการ";',
     '  }catch(e){}',
     '}',
-    'if(tokEl.value) refresh(); setInterval(function(){ if(tokEl.value) refresh(); }, 5000);',
+    'if(tokEl.value) refresh(); setInterval(function(){ if(!document.hidden && tokEl.value) refresh(); }, 10000);',
     '</script></body></html>'
   ].join('\n');
 }

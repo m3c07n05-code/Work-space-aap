@@ -21,7 +21,7 @@ on:
   issues:
     types: [opened]
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "0 */2 * * *"
 
 concurrency:
   group: crd-cloud-runner
@@ -55,21 +55,48 @@ jobs:
       CRD_ISSUE_BODY: ${{ github.event.issue.body }}
 
     steps:
+      - name: Lightweight preflight gate (skip idle scheduled runs)
+        id: preflight
+        run: |
+          if [ "$CRD_EVENT_NAME" = "schedule" ]; then
+            if [ -z "$CRD_GATEWAY_TOKEN" ]; then
+              echo "Scheduled check skipped: CRD_GATEWAY_TOKEN is not set (zero idle load)."
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            PENDING=$(curl -sL --max-time 15 -G "$CRD_GATEWAY_URL" \
+              --data-urlencode "action=GET_PENDING_JOBS" \
+              --data-urlencode "lane=CLOUD_ONLY" \
+              --data-urlencode "workerId=GITHUB-CLOUD-RUNNER" \
+              --data-urlencode "token=$CRD_GATEWAY_TOKEN" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('jobs',[])) if d.get('success') else 0)" 2>/dev/null || echo "0")
+            if [ "$PENDING" = "0" ]; then
+              echo "Scheduled check skipped: 0 pending CLOUD_ONLY jobs (zero idle load)."
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+
       - name: Checkout repository
+        if: steps.preflight.outputs.should_run == 'true'
         uses: actions/checkout@v4
 
       - name: Setup Python 3.11
+        if: steps.preflight.outputs.should_run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install Python runtime dependency (Pillow)
+        if: steps.preflight.outputs.should_run == 'true'
         run: python3 -m pip install --quiet pillow
 
       - name: Run Cloud Runner self-tests
+        if: steps.preflight.outputs.should_run == 'true'
         run: python3 -B scripts/cloud_runner.py --self-test
 
       - name: Execute Cloud Runner job cycle
+        if: steps.preflight.outputs.should_run == 'true'
         run: |
           DRY_FLAG=""
           if [ "$CRD_INPUT_DRY_RUN" = "true" ]; then
@@ -90,7 +117,7 @@ jobs:
           fi
 
       - name: Upload Cloud Runner report & generated outputs
-        if: always()
+        if: always() && steps.preflight.outputs.should_run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: crd-cloud-runner-report-${{ github.run_id }}
