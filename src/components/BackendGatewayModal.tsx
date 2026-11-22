@@ -58,9 +58,9 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
     setConfig({
       baseUrl: DEFAULT_GAS_URL,
       webhookEndpoint: '',
-      apiKey: 'gas_auto_token_manifest_sync',
+      apiKey: '',
       isSimulationMode: false,
-      status: 'connected',
+      status: DEFAULT_GAS_URL ? 'connected' : 'offline',
       latencyMs: 18,
     });
     setTestResult(null);
@@ -68,9 +68,9 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
 
   const handlePresetSimulator = () => {
     setConfig({
-      baseUrl: 'https://api.nexusledger.io/v1',
-      webhookEndpoint: '/webhooks/contract-dispatch',
-      apiKey: 'nk_live_920f83ba7c1e4d',
+      baseUrl: '',
+      webhookEndpoint: '',
+      apiKey: '',
       isSimulationMode: true,
       status: 'simulated',
       latencyMs: 14,

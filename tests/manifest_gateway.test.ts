@@ -3,13 +3,16 @@
  * Verifies PING, GET_MANIFEST, DEPLOY_EVOLVED_UI_DESIGN write, and read-back persistence.
  */
 
-const GAS_ENDPOINT =
-  'https://script.google.com/macros/s/AKfycbwTEboyfHQ0LzmrP0mtxWCYtrg13Jz5JqKpLVW-8Dtf3bWYqoc-ZoPObtZGjSlKriBU/exec';
+const GAS_ENDPOINT = process.env.GAS_GATEWAY_URL || '';
 
 async function runIntegrationTest() {
+  if (!GAS_ENDPOINT) {
+    console.log('Skipping live GAS integration test: GAS_GATEWAY_URL is not set.');
+    return;
+  }
   console.log('===============================================================');
   console.log('🚀 Milestone 1: Live GAS Endpoint & Manifest Integration Test');
-  console.log(`Endpoint: ${GAS_ENDPOINT}`);
+  console.log('Endpoint: [CONFIGURED_VIA_ENV]');
   console.log('===============================================================\n');
 
   let passedTests = 0;

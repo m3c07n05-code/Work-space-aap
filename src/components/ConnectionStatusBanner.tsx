@@ -44,12 +44,14 @@ export const ConnectionStatusBanner: React.FC<ConnectionStatusBannerProps> = ({
   };
 
   const handleCopyUrl = () => {
+    if (!config.baseUrl) return;
     navigator.clipboard.writeText(config.baseUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   const isSyncing = syncState.status === 'syncing' || isPinging;
+  const isConfigured = Boolean(config.baseUrl);
 
   return (
     <GlassBox variant="frosted" className="p-5 sm:p-6 space-y-4">
@@ -66,8 +68,12 @@ export const ConnectionStatusBanner: React.FC<ConnectionStatusBannerProps> = ({
               </span>
 
               <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-white/75 dark:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 border border-white/90 dark:border-emerald-500/40 flex items-center gap-1.5 shadow-2xs backdrop-blur-md">
-                <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                Google Apps Script (Connected)
+                <span className={`w-2 h-2 rounded-full ${isConfigured && !config.isSimulationMode ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                {config.isSimulationMode
+                  ? 'Offline Simulator'
+                  : isConfigured
+                    ? 'Google Apps Script (Configured)'
+                    : 'Gateway Not Configured'}
               </span>
 
               {/* Real-time Sync Indicator ('กำลังซิงค์' / 'ล่าสุด') */}
@@ -130,20 +136,24 @@ export const ConnectionStatusBanner: React.FC<ConnectionStatusBannerProps> = ({
       <div className="bg-slate-200/45 dark:bg-slate-900/90 backdrop-blur-xl border border-white/85 dark:border-slate-800 rounded-2xl p-3 flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 text-xs shadow-[inset_0_1px_2px_rgba(255,255,255,0.85)]">
         <div className="flex items-center gap-2 truncate min-w-0">
           <span className="text-slate-500 font-mono font-semibold shrink-0">Web App:</span>
-          <span className="font-mono text-slate-800 dark:text-slate-200 truncate select-all">{config.baseUrl}</span>
+          <span className="font-mono text-slate-800 dark:text-slate-200 truncate select-all">
+            {config.baseUrl || 'ยังไม่ได้ตั้งค่า Gateway URL (กรุณากด "ตั้งค่า URL" เพื่อกรอกบนเบราว์เซอร์)'}
+          </span>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <button
-            onClick={handleCopyUrl}
-            className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-slate-200/70 dark:bg-slate-800 hover:bg-white/90 text-slate-800 dark:text-slate-200 border border-white/95 dark:border-slate-700 shadow-[inset_0_1px_1px_rgba(255,255,255,0.95)] transition-colors cursor-pointer text-xs font-semibold backdrop-blur-md"
-            title="คัดลอก URL"
-          >
-            {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5 text-slate-600" />}
-            <span>{copied ? 'คัดลอกแล้ว' : 'คัดลอก'}</span>
-          </button>
+          {config.baseUrl && (
+            <button
+              onClick={handleCopyUrl}
+              className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-slate-200/70 dark:bg-slate-800 hover:bg-white/90 text-slate-800 dark:text-slate-200 border border-white/95 dark:border-slate-700 shadow-[inset_0_1px_1px_rgba(255,255,255,0.95)] transition-colors cursor-pointer text-xs font-semibold backdrop-blur-md"
+              title="คัดลอก URL"
+            >
+              {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5 text-slate-600" />}
+              <span>{copied ? 'คัดลอกแล้ว' : 'คัดลอก'}</span>
+            </button>
+          )}
           <span className="text-emerald-800 dark:text-emerald-400 font-semibold text-xs flex items-center gap-1 bg-white/75 dark:bg-emerald-950/40 px-3 py-1 rounded-full border border-white/90 dark:border-emerald-800 backdrop-blur-md">
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-            <span>{feedback || 'พร้อมส่งคำสั่งขยายงานจริง'}</span>
+            <span>{feedback || (isConfigured ? 'พร้อมส่งคำสั่งขยายงานจริง' : 'โหมดปลอดภัย (ไม่ฝัง URL สาธารณะ)')}</span>
           </span>
         </div>
       </div>

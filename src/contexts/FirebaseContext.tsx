@@ -17,7 +17,7 @@ import {
   limit,
   serverTimestamp,
 } from 'firebase/firestore';
-import { auth, db, googleProvider, handleFirestoreError, OperationType } from '../lib/firebase';
+import { auth, db, googleProvider, isFirebaseConfigured, handleFirestoreError, OperationType } from '../lib/firebase';
 import { backendGateway, ScopeItem } from '../services/backendGateway';
 
 export type ChatRoleMode = 'deep' | 'complex' | 'general' | 'fast';
@@ -80,7 +80,7 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   // Upsert public & private split user documents when signed in
   const syncUserProfileDocs = useCallback(async (u: User) => {
-    if (!u.emailVerified) return;
+    if (!db || !u.emailVerified) return;
     const publicPath = `users/${u.uid}/public/profile`;
     const privatePath = `users/${u.uid}/private/info`;
 
@@ -125,6 +125,10 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, []);
 
   useEffect(() => {
+    if (!isFirebaseConfigured || !auth) {
+      setAuthLoading(false);
+      return;
+    }
     const unsub = onAuthStateChanged(auth, (firebaseUser) => {
       setUser(firebaseUser);
       setAuthLoading(false);
@@ -142,7 +146,7 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   // Real-time Firestore listeners once authenticated
   useEffect(() => {
-    if (!user || !user.emailVerified) return;
+    if (!db || !user || !user.emailVerified) return;
 
     const scopesColPath = `users/${user.uid}/scopes`;
     const scopesQuery = query(
@@ -221,6 +225,10 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const signInWithGoogle = async () => {
     setAuthError(null);
+    if (!auth || !googleProvider) {
+      setAuthError('ยังไม่ได้ตั้งค่า VITE_FIREBASE_API_KEY ในระบบ');
+      return;
+    }
     backendGateway.setSyncStatus('syncing');
     try {
       await signInWithPopup(auth, googleProvider);
@@ -235,6 +243,7 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const signOutUser = async () => {
     setAuthError(null);
+    if (!auth) return;
     try {
       await signOut(auth);
     } catch (err) {
@@ -243,7 +252,7 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const syncScopeToCloud = async (scope: ScopeItem) => {
-    if (!user || !user.emailVerified) return;
+    if (!db || !user || !user.emailVerified) return;
     backendGateway.setSyncStatus('syncing');
     const safeId = sanitizeId(scope.id);
     const path = `users/${user.uid}/scopes/${safeId}`;
@@ -283,7 +292,7 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const deleteScopeFromCloud = async (scopeId: string) => {
-    if (!user || !user.emailVerified) return;
+    if (!db || !user || !user.emailVerified) return;
     backendGateway.setSyncStatus('syncing');
     const safeId = sanitizeId(scopeId);
     const path = `users/${user.uid}/scopes/${safeId}`;
@@ -299,7 +308,7 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const createCloudChatSession = async (
     session: Omit<CloudChatSession, 'ownerId' | 'createdAt' | 'updatedAt'>
   ) => {
-    if (!user || !user.emailVerified) return;
+    if (!db || !user || !user.emailVerified) return;
     backendGateway.setSyncStatus('syncing');
     const safeId = sanitizeId(session.id);
     const path = `users/${user.uid}/chats/${safeId}`;
@@ -324,7 +333,7 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     chatId: string,
     patch: { title?: string; roleId?: ChatRoleMode; modelId?: string }
   ) => {
-    if (!user || !user.emailVerified) return;
+    if (!db || !user || !user.emailVerified) return;
     const safeId = sanitizeId(chatId);
     const path = `users/${user.uid}/chats/${safeId}`;
     try {
@@ -350,7 +359,7 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     sessionId: string,
     msg: Omit<CloudChatMessage, 'ownerId' | 'sessionId' | 'createdAt'>
   ) => {
-    if (!user || !user.emailVerified) return;
+    if (!db || !user || !user.emailVerified) return;
     backendGateway.setSyncStatus('syncing');
     const safeChatId = sanitizeId(sessionId);
     const safeMsgId = sanitizeId(msg.id);
@@ -374,7 +383,7 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const subscribeChatMessages = useCallback(
     (sessionId: string, onData: (messages: CloudChatMessage[]) => void) => {
-      if (!user || !user.emailVerified || !sessionId) {
+      if (!db || !user || !user.emailVerified || !sessionId) {
         return () => {};
       }
       const safeChatId = sanitizeId(sessionId);

@@ -192,8 +192,7 @@ app.get('/api/ai/codebase-summary', (_req, res) => {
   const codebaseInventory = {
     version: '2026.11.12-CRD-UNIFIED',
     framework: 'React 19 + TypeScript + Vite + Tailwind CSS + Three.js + Firebase',
-    gatewayUrl:
-      'https://script.google.com/macros/s/AKfycbwTEboyfHQ0LzmrP0mtxWCYtrg13Jz5JqKpLVW-8Dtf3bWYqoc-ZoPObtZGjSlKriBU/exec',
+    gatewayUrl: process.env.GAS_GATEWAY_URL ? '[CONFIGURED_VIA_ENV]' : '[NOT_CONFIGURED]',
     targetWorkspaceFolderId: '1RvGehvlDrPTaR9JvQgCcFPqiQbRE8_yn',
     manifestFileName: '00_Project_Manifest.json',
     activeGatesCount: 16,

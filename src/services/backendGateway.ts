@@ -6,7 +6,9 @@ const STORAGE_KEY_LOGS = 'nexus_gateway_logs';
 const STORAGE_KEY_SCOPES = 'nexus_scopes_data';
 
 export const DEFAULT_GAS_URL =
-  'https://script.google.com/macros/s/AKfycbwTEboyfHQ0LzmrP0mtxWCYtrg13Jz5JqKpLVW-8Dtf3bWYqoc-ZoPObtZGjSlKriBU/exec';
+  (typeof import.meta !== 'undefined' &&
+    (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_GAS_GATEWAY_URL) ||
+  '';
 
 export const WORKSPACE_FOLDER_ID = '1RvGehvlDrPTaR9JvQgCcFPqiQbRE8_yn'; // AI_Project_Workspace
 export const MANIFEST_FILE_NAME = '00_Project_Manifest.json';
@@ -92,9 +94,9 @@ class BackendGatewayService {
     return {
       baseUrl: DEFAULT_GAS_URL,
       webhookEndpoint: '',
-      apiKey: 'gas_auto_token_manifest_sync',
+      apiKey: '',
       isSimulationMode: false,
-      status: 'connected',
+      status: DEFAULT_GAS_URL ? 'connected' : 'offline',
       latencyMs: 18,
       lastPing: new Date().toLocaleTimeString('th-TH'),
     };
@@ -427,6 +429,14 @@ class BackendGatewayService {
   }> {
     this.setSyncStatus('syncing');
     const endpoint = overrideEndpoint || this.config.baseUrl;
+    if (!endpoint) {
+      this.setSyncStatus('synced');
+      return {
+        success: false,
+        manifest: null,
+        error: 'Gateway URL not configured',
+      };
+    }
     const isGas = endpoint.includes('script.google.com');
     const startTime = performance.now();
     const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
@@ -532,6 +542,7 @@ class BackendGatewayService {
       timestamp: new Date().toISOString(),
       targetManifest: MANIFEST_FILE_NAME,
       workspaceId: WORKSPACE_FOLDER_ID,
+      ...(this.config.apiKey ? { token: this.config.apiKey } : {}),
       ...payload,
     };
 
@@ -561,7 +572,7 @@ class BackendGatewayService {
         timestamp,
         action,
         method: 'POST',
-        endpoint: endpoint || DEFAULT_GAS_URL,
+        endpoint: endpoint || 'simulator://local',
         headers,
         payload: payloadEnvelope,
         status: 200,
@@ -575,6 +586,26 @@ class BackendGatewayService {
       this.updateConfig({ latencyMs, lastPing: timestamp });
       this.setSyncStatus('synced');
       return { success: true, log: simLog };
+    }
+
+    if (!endpoint) {
+      const unconfiguredLog: PayloadLog = {
+        id: logId,
+        timestamp,
+        action,
+        method: 'POST',
+        endpoint: '',
+        headers,
+        payload: payloadEnvelope,
+        status: 0,
+        latencyMs: 0,
+        response: { error: 'Gateway URL not configured' },
+        isSimulated: false,
+      };
+      this.logs = [unconfiguredLog, ...this.logs.slice(0, 49)];
+      this.notifyLogs();
+      this.setSyncStatus('synced');
+      return { success: false, log: unconfiguredLog };
     }
 
     try {

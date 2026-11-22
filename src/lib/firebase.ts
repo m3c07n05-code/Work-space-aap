@@ -1,14 +1,45 @@
-import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
-import firebaseConfig from '../../firebase-applet-config.json';
+import { initializeApp, FirebaseApp } from 'firebase/app';
+import { getAuth, GoogleAuthProvider, Auth } from 'firebase/auth';
+import { getFirestore, doc, getDocFromServer, Firestore } from 'firebase/firestore';
+import baseFirebaseConfig from '../../firebase-applet-config.json';
 
-const app = initializeApp(firebaseConfig);
+const env =
+  (typeof import.meta !== 'undefined' &&
+    (import.meta as unknown as { env?: Record<string, string> }).env) ||
+  {};
 
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-export const auth = getAuth(app);
-export const googleProvider = new GoogleAuthProvider();
-googleProvider.setCustomParameters({ prompt: 'select_account' });
+const firebaseConfig = {
+  ...baseFirebaseConfig,
+  apiKey: env.VITE_FIREBASE_API_KEY || baseFirebaseConfig.apiKey || '',
+  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || baseFirebaseConfig.authDomain || '',
+  projectId: env.VITE_FIREBASE_PROJECT_ID || baseFirebaseConfig.projectId || '',
+  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || baseFirebaseConfig.storageBucket || '',
+  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || baseFirebaseConfig.messagingSenderId || '',
+  appId: env.VITE_FIREBASE_APP_ID || baseFirebaseConfig.appId || '',
+  firestoreDatabaseId:
+    env.VITE_FIREBASE_FIRESTORE_DATABASE_ID || baseFirebaseConfig.firestoreDatabaseId || '',
+};
+
+export const isFirebaseConfigured = Boolean(
+  firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.appId
+);
+
+let app: FirebaseApp | null = null;
+let db: Firestore | null = null;
+let auth: Auth | null = null;
+let googleProvider: GoogleAuthProvider | null = null;
+
+if (isFirebaseConfigured) {
+  app = initializeApp(firebaseConfig);
+  db = firebaseConfig.firestoreDatabaseId
+    ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
+    : getFirestore(app);
+  auth = getAuth(app);
+  googleProvider = new GoogleAuthProvider();
+  googleProvider.setCustomParameters({ prompt: 'select_account' });
+}
+
+export { db, auth, googleProvider };
 
 export enum OperationType {
   CREATE = 'create',
@@ -44,13 +75,13 @@ export function handleFirestoreError(
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
-      userId: auth.currentUser?.uid ?? null,
-      email: auth.currentUser?.email ?? null,
-      emailVerified: auth.currentUser?.emailVerified ?? null,
-      isAnonymous: auth.currentUser?.isAnonymous ?? null,
-      tenantId: auth.currentUser?.tenantId ?? null,
+      userId: auth?.currentUser?.uid ?? null,
+      email: auth?.currentUser?.email ?? null,
+      emailVerified: auth?.currentUser?.emailVerified ?? null,
+      isAnonymous: auth?.currentUser?.isAnonymous ?? null,
+      tenantId: auth?.currentUser?.tenantId ?? null,
       providerInfo:
-        auth.currentUser?.providerData?.map((provider) => ({
+        auth?.currentUser?.providerData?.map((provider) => ({
           providerId: provider.providerId,
           email: provider.email,
         })) || [],
@@ -63,6 +94,7 @@ export function handleFirestoreError(
 }
 
 export async function validateFirestoreConnection(): Promise<boolean> {
+  if (!db) return false;
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
     return true;
@@ -76,4 +108,6 @@ export async function validateFirestoreConnection(): Promise<boolean> {
   }
 }
 
-validateFirestoreConnection();
+if (isFirebaseConfigured) {
+  validateFirestoreConnection();
+}
