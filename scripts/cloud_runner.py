@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""
+r"""
 CRD Cloud Runner (GitHub Actions Autonomous Executor & Advisor)
 ===============================================================
 Runs 100% headless on GitHub Actions Cloud (no Antigravity app, no CMS-2 PC required).

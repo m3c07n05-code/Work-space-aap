@@ -15,6 +15,8 @@ const MAX_PENDING_JOBS = 50;
 const MAX_COMPLETED_JOBS = 50;
 const MAX_CALLBACK_DEPTH = 2;
 const DEFAULT_GH_REPO = 'm3c07n05-code/Work-space-aap';
+const ENABLE_CMS2_BRIDGE = false;
+const CMS2_PAUSED_ACTIONS = ['GET_PENDING_JOBS', 'COMPLETE_JOB', 'DEVICE_HEARTBEAT', 'POLL_DOC_B', 'SYNC_DOC_B'];
 
 function doGet(e) {
   try {
@@ -53,6 +55,22 @@ function doGet(e) {
     }
 
     if (action === 'GET_PENDING_JOBS') {
+      const reqLane = String(params.lane || '').trim().toUpperCase();
+      const reqWorker = String(params.workerId || '').trim().toUpperCase();
+      if (!ENABLE_CMS2_BRIDGE && (reqLane === 'CMS2_LOCAL' || (!reqLane && reqWorker.indexOf('CMS-2') !== -1))) {
+        return jsonResponse_({
+          ok: true,
+          success: true,
+          paused: true,
+          action: 'GET_PENDING_JOBS',
+          jobs: [],
+          totalPending: 0,
+          cms2BridgeEnabled: false,
+          note: 'CMS-2 bridge paused by owner',
+          serverTimeIso: new Date().toISOString(),
+          timestamp: new Date().toISOString()
+        });
+      }
       const manifest = loadOrCreateManifest_();
       const pendingJobs = getPendingJobsList_(manifest, params.lane, params.workerId);
       return jsonResponse_({
@@ -135,6 +153,17 @@ function doPost(e) {
 
     const action = String(payload.action || '').trim();
     const nowIso = new Date().toISOString();
+
+    if (!ENABLE_CMS2_BRIDGE && CMS2_PAUSED_ACTIONS.indexOf(action) !== -1) {
+      return jsonResponse_({
+        ok: true,
+        success: true,
+        paused: true,
+        action: action,
+        cms2BridgeEnabled: false,
+        note: 'CMS-2 bridge paused by owner'
+      });
+    }
 
     // Read-only actions (no ScriptLock needed)
     if (action === 'GET_STATE' || action === 'GET_MANIFEST' || action === 'READ_MANIFEST') {

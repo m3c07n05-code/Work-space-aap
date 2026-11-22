@@ -85,8 +85,70 @@ async function runRobustnessTests() {
     }
     console.log('  ✓ Test 4 Passed: non-GAS dispatchAction preserved HTTP 404 and raw text.\n');
 
+    // Test 5: Unconfigured gateway must NOT return fake 200
+    console.log('[Test 5/6] Probing testConnection with empty baseUrl (no fake 200)...');
+    backendGateway.updateConfig({ baseUrl: '', apiKey: '', isSimulationMode: false });
+    const unconfRes = await backendGateway.testConnection();
+    if (unconfRes.success !== false || unconfRes.status !== 0) {
+      throw new Error(`Expected unconfigured testConnection to fail closed (success=false, status=0), got: ${JSON.stringify(unconfRes)}`);
+    }
+    console.log('  ✓ Test 5 Passed: unconfigured testConnection failed closed without fake 200.\n');
+
+    // Test 6: CORS-readable token-authenticated readManifest & PING
+    console.log('[Test 6/6] Probing token forwarding on GAS PING & GET_MANIFEST readback...');
+    serverMode = 'VALID_JSON';
+    const seenTokens: string[] = [];
+    const authServer = http.createServer((req, res) => {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      if (req.method === 'GET') {
+        const parsed = new URL(req.url || '/', 'http://127.0.0.1');
+        const tok = parsed.searchParams.get('token') || '';
+        seenTokens.push(`GET:${tok}`);
+        if (tok !== 'TEST_TOKEN_XYZ') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'Unauthorized' }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: true,
+          manifest: { projectName: 'CRD CENTER V2', modules: [{ componentId: 'UI-CRD-001' }] },
+        }));
+        return;
+      }
+      let raw = '';
+      req.on('data', (c) => { raw += c; });
+      req.on('end', () => {
+        const body = JSON.parse(raw || '{}');
+        seenTokens.push(`POST:${body.token || ''}`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: body.token === 'TEST_TOKEN_XYZ', status: 'CONNECTED' }));
+      });
+    });
+    await new Promise<void>((resolve) => authServer.listen(0, '127.0.0.1', () => resolve()));
+    try {
+      const authAddr = authServer.address() as { port: number };
+      const authGasUrl = `http://127.0.0.1:${authAddr.port}/exec?script.google.com=true`;
+      backendGateway.updateConfig({ baseUrl: authGasUrl, apiKey: 'TEST_TOKEN_XYZ', isSimulationMode: false });
+
+      const pingAck = await backendGateway.testConnection();
+      if (!pingAck.success || pingAck.status !== 200) {
+        throw new Error(`Expected token-authenticated PING success, got: ${JSON.stringify(pingAck)}`);
+      }
+      const readAck = await backendGateway.readManifest();
+      if (!readAck.success || !readAck.manifest || readAck.manifest.modules.length !== 1) {
+        throw new Error(`Expected CORS-readable manifest readback, got: ${JSON.stringify(readAck)}`);
+      }
+      if (!seenTokens.includes('POST:TEST_TOKEN_XYZ') || !seenTokens.includes('GET:TEST_TOKEN_XYZ')) {
+        throw new Error(`Expected token forwarded on both POST and GET, got: ${seenTokens.join(', ')}`);
+      }
+      console.log('  ✓ Test 6 Passed: token forwarded and CORS-readable manifest readback verified.\n');
+    } finally {
+      authServer.close();
+    }
+
     console.log('===============================================================');
-    console.log('🎉 ALL 4 ROBUSTNESS TESTS PASSED CLEANLY (Zero TypeError / Stream Reuse)');
+    console.log('🎉 ALL 6 ROBUSTNESS TESTS PASSED CLEANLY (Zero TypeError / Stream Reuse)');
     console.log('===============================================================');
   } finally {
     server.close();

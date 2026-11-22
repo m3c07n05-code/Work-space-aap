@@ -579,20 +579,21 @@ export const Work4LetterPrintStudio: React.FC<Work4LetterPrintStudioProps> = ({
     };
 
     try {
-      // 1. Try pinging local CMS-2 agent if reachable on localhost (non-blocking)
+      // 1. Try pinging local CMS-2 agent if reachable via CORS-readable response
       let localAgentStatus = 'QUEUED_VIA_GATEWAY_BRIDGE';
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 900);
-        await fetch(cms2LocalEndpoint, {
+        const localResp = await fetch(cms2LocalEndpoint, {
           method: 'POST',
-          mode: 'no-cors',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           body: JSON.stringify(zeroPiiBatchSummary),
           signal: controller.signal,
         });
         clearTimeout(timer);
-        localAgentStatus = 'DISPATCHED_TO_LOCAL_CMS2_ENDPOINT';
+        localAgentStatus = localResp.ok
+          ? 'DISPATCHED_TO_LOCAL_CMS2_ENDPOINT'
+          : 'BRIDGED_VIA_GAS_MANIFEST_AND_PS1';
       } catch {
         localAgentStatus = 'BRIDGED_VIA_GAS_MANIFEST_AND_PS1';
       }

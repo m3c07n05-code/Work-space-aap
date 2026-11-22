@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
@@ -99,6 +100,31 @@ function runWork1CloudflarePrepTests() {
     assert.ok(!regex.test(distHtml), `dist/index.html must NOT contain ${label}`);
   }
   console.log('✅ Test 4: dist/index.html, dist/_redirects SPA fallback, and Zero-Secrets scan passed');
+
+  // 5. Code.gs SHA-256 parity + security toggles + src/ Zero-no-cors & Zero-hardcoded GAS URL
+  const rootCodeGsPath = path.join(rootDir, 'Code.gs');
+  const scriptsCodeGsPath = path.join(rootDir, 'scripts', 'Code.gs');
+  const rootCodeGs = fs.readFileSync(rootCodeGsPath, 'utf8');
+  const scriptsCodeGs = fs.readFileSync(scriptsCodeGsPath, 'utf8');
+  const hashRoot = crypto.createHash('sha256').update(rootCodeGs).digest('hex');
+  const hashScripts = crypto.createHash('sha256').update(scriptsCodeGs).digest('hex');
+  assert.equal(hashRoot, hashScripts, 'Code.gs and scripts/Code.gs must have 100% SHA-256 parity');
+  assert.ok(rootCodeGs.includes('LockService.getScriptLock()'), 'Code.gs must use LockService');
+  assert.ok(rootCodeGs.includes('CRD_GATEWAY_TOKEN'), 'Code.gs must enforce CRD_GATEWAY_TOKEN');
+  assert.ok(rootCodeGs.includes('const ENABLE_CMS2_BRIDGE = false;'), 'Code.gs must include ENABLE_CMS2_BRIDGE = false toggle');
+
+  const srcDir = path.join(rootDir, 'src');
+  const walkSrc = (dir: string): string[] =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = path.join(dir, entry.name);
+      return entry.isDirectory() ? walkSrc(full) : [full];
+    });
+  for (const filePath of walkSrc(srcDir)) {
+    const content = fs.readFileSync(filePath, 'utf8');
+    assert.ok(!/["']no-cors["']/.test(content), `${path.relative(rootDir, filePath)} must NOT use no-cors`);
+    assert.ok(!/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]{20,}/.test(content), `${path.relative(rootDir, filePath)} must NOT hardcode GAS /exec URL`);
+  }
+  console.log(`✅ Test 5: Code.gs SHA-256 parity (${hashRoot.slice(0, 12)}...), LockService, CRD_GATEWAY_TOKEN, ENABLE_CMS2_BRIDGE, and src/ hygiene passed`);
 
   console.log('\n🎉 ALL WORK 1 & CLOUDFLARE PAGES PREP TESTS PASSED!');
 }

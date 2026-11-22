@@ -30,7 +30,7 @@ from typing import Dict, Any, List, Optional
 sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
-GAS_GATEWAY_URL = "https://script.google.com/macros/s/AKfycbwTEboyfHQ0LzmrP0mtxWCYtrg13Jz5JqKpLVW-8Dtf3bWYqoc-ZoPObtZGjSlKriBU/exec"
+GAS_GATEWAY_URL = os.environ.get("GAS_GATEWAY_URL", os.environ.get("CRD_GATEWAY_URL", "")).strip()
 RPT_DIR_DEFAULT = r"D:\COOP\VIEWREPORT\หนังสือบอกกล่าวการชำระหนี้_CLT"
 TASK_NAME_WATCHER = "CRD_CMS2_TaskInbox_Watcher_10Min"
 TASK_NAME_WORKER = "CRD_CMS2_Worker_Boot"
@@ -117,6 +117,8 @@ def _log_dispatch(msg: str) -> None:
 
 
 def gas_get(action: str, params: Optional[Dict[str, str]] = None, timeout: int = 15) -> Dict[str, Any]:
+    if not GAS_GATEWAY_URL:
+        return {"success": False, "error": "GAS_GATEWAY_URL not configured"}
     query: Dict[str, str] = {"action": action}
     token = _gateway_token()
     if token:
@@ -134,6 +136,8 @@ def gas_get(action: str, params: Optional[Dict[str, str]] = None, timeout: int =
 
 
 def gas_post(payload: Dict[str, Any], timeout: int = 15) -> Dict[str, Any]:
+    if not GAS_GATEWAY_URL:
+        return {"success": False, "error": "GAS_GATEWAY_URL not configured"}
     body = dict(payload)
     token = _gateway_token()
     if token and "token" not in body:

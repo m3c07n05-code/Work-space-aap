@@ -36,7 +36,11 @@ export const ConnectionStatusBanner: React.FC<ConnectionStatusBannerProps> = ({
     setFeedback(null);
     try {
       const res = await backendGateway.testConnection();
-      setFeedback(`ส่งสัญญาณ Ping สำเร็จ (${res.latencyMs}ms) เชื่อมต่อสมบูรณ์`);
+      setFeedback(
+        res.success
+          ? `ส่งสัญญาณ Ping สำเร็จ (${res.latencyMs}ms) เชื่อมต่อสมบูรณ์`
+          : res.message || 'เชื่อมต่อ Gateway ไม่สำเร็จ'
+      );
       setTimeout(() => setFeedback(null), 4000);
     } finally {
       setIsPinging(false);

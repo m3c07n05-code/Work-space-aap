@@ -324,7 +324,7 @@ class BackendGatewayService {
     this.updateConfig({ status: 'testing' });
     const startTime = performance.now();
 
-    if (this.config.isSimulationMode || !this.config.baseUrl) {
+    if (this.config.isSimulationMode) {
       await new Promise((r) => setTimeout(r, 350));
       const latencyMs = Math.round(performance.now() - startTime);
       this.updateConfig({
@@ -341,6 +341,21 @@ class BackendGatewayService {
       };
     }
 
+    if (!this.config.baseUrl) {
+      this.updateConfig({
+        status: 'offline',
+        latencyMs: 0,
+        lastPing: new Date().toLocaleTimeString('th-TH'),
+      });
+      this.setSyncStatus('synced');
+      return {
+        success: false,
+        latencyMs: 0,
+        status: 0,
+        message: 'ยังไม่ได้ตั้งค่า Gateway URL (โหมดปลอดภัย)',
+      };
+    }
+
     try {
       const isGas = this.config.baseUrl.includes('script.google.com');
 
@@ -353,6 +368,7 @@ class BackendGatewayService {
             action: 'PING',
             source: 'NexusLedger_UI',
             timestamp: new Date().toISOString(),
+            ...(this.config.apiKey ? { token: this.config.apiKey } : {}),
           }),
         });
 
@@ -446,7 +462,10 @@ class BackendGatewayService {
       let url = endpoint;
       if (isGas) {
         const separator = url.includes('?') ? '&' : '?';
-        url = `${url}${separator}action=GET_MANIFEST`;
+        const tokenParam = this.config.apiKey
+          ? `&token=${encodeURIComponent(this.config.apiKey)}`
+          : '';
+        url = `${url}${separator}action=GET_MANIFEST${tokenParam}`;
       }
 
       const response = await fetch(url, {

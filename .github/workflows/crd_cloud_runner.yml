@@ -43,7 +43,7 @@ jobs:
     env:
       PYTHONDONTWRITEBYTECODE: "1"
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      CRD_GATEWAY_URL: ${{ vars.CRD_GATEWAY_URL || 'https://script.google.com/macros/s/AKfycbwTEboyfHQ0LzmrP0mtxWCYtrg13Jz5JqKpLVW-8Dtf3bWYqoc-ZoPObtZGjSlKriBU/exec' }}
+      CRD_GATEWAY_URL: ${{ vars.CRD_GATEWAY_URL }}
       CRD_GATEWAY_TOKEN: ${{ secrets.CRD_GATEWAY_TOKEN }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       IFTTT_WEBHOOK_URL: ${{ secrets.IFTTT_WEBHOOK_URL }}
@@ -63,8 +63,8 @@ jobs:
         id: preflight
         run: |
           if [ "$CRD_EVENT_NAME" = "schedule" ]; then
-            if [ -z "$CRD_GATEWAY_TOKEN" ]; then
-              echo "Scheduled check skipped: CRD_GATEWAY_TOKEN is not set (zero idle load)."
+            if [ -z "$CRD_GATEWAY_URL" ] || [ -z "$CRD_GATEWAY_TOKEN" ]; then
+              echo "Scheduled check skipped: CRD_GATEWAY_URL or CRD_GATEWAY_TOKEN is not set (zero idle load)."
               echo "should_run=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi

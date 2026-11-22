@@ -2,7 +2,7 @@
 
 ## Architecture
 - **Frontend**: React 19 + TypeScript + Vite + Tailwind CSS.
-- **Backend / Integration Target**: Google Apps Script Web App Endpoint (`https://script.google.com/macros/s/AKfycbwTEboyfHQ0LzmrP0mtxWCYtrg13Jz5JqKpLVW-8Dtf3bWYqoc-ZoPObtZGjSlKriBU/exec`).
+- **Backend / Integration Target**: Google Apps Script Web App Endpoint (configured via `GAS_GATEWAY_URL` / `VITE_GAS_GATEWAY_URL`; never hardcoded in public repo).
 - **Cloud Storage**: Google Drive folder `1RvGehvlDrPTaR9JvQgCcFPqiQbRE8_yn` (`AI_Project_Workspace`) containing `00_Project_Manifest.json`.
 - **Communication Protocol**: CORS-friendly HTTP POST / GET with `Content-Type: text/plain;charset=utf-8` and NO custom headers to avoid unsupported OPTIONS preflight on Google Apps Script. Single-stream consumption pattern reading `response.text()` before `JSON.parse()`.
 
