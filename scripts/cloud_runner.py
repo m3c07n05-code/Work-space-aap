@@ -598,6 +598,88 @@ def post_github_issue_comment(
         return {"posted": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
+def resolve_ifttt_webhook_url(
+    explicit_url: str = "",
+    webhook_key: str = "",
+    event_name: str = "crd_cloud_alert",
+    allow_localhost_test: bool = False,
+) -> Tuple[str, str, str]:
+    """
+    Validates and builds an IFTTT Maker Webhooks URL safely.
+    Returns (url, host, event_or_error). Rejects non-maker.ifttt.com hosts against SSRF.
+    """
+    clean_event = re.sub(r"[^A-Za-z0-9_-]", "", str(event_name or "crd_cloud_alert").strip()) or "crd_cloud_alert"
+    raw_url = str(explicit_url or "").strip()
+    if raw_url:
+        parsed = urllib.parse.urlparse(raw_url)
+        host = (parsed.hostname or "").lower()
+        is_ifttt = parsed.scheme == "https" and host == "maker.ifttt.com" and parsed.path.startswith("/trigger/")
+        is_local_test = allow_localhost_test and parsed.scheme == "http" and host == "127.0.0.1"
+        if not (is_ifttt or is_local_test):
+            return "", "", "INVALID_IFTTT_HOST"
+        parts = [p for p in parsed.path.split("/") if p]
+        ev = parts[1] if len(parts) >= 2 and parts[0] == "trigger" else clean_event
+        return raw_url, (parsed.netloc or host), ev
+
+    raw_key = str(webhook_key or "").strip()
+    if raw_key:
+        if any(ch in raw_key for ch in ("/", "?", "&", " ", "\r", "\n")):
+            return "", "", "INVALID_IFTTT_KEY"
+        url = f"https://maker.ifttt.com/trigger/{clean_event}/with/key/{raw_key}"
+        return url, "maker.ifttt.com", clean_event
+
+    return "", "", "NOT_CONFIGURED"
+
+
+def notify_ifttt_webhook(
+    stage: str,
+    value1: str,
+    value2: str = "",
+    value3: str = "",
+    explicit_url: str = "",
+    webhook_key: str = "",
+    event_name: str = "",
+    allow_localhost_test: bool = False,
+) -> Dict[str, Any]:
+    """
+    Sends a Zero-PII 2-stage alert (ACK / DONE / FAILED) to IFTTT Maker Webhooks.
+    Never exposes secrets or full webhook URLs in return payloads or logs.
+    """
+    env_url = explicit_url or os.environ.get("IFTTT_WEBHOOK_URL", "").strip()
+    env_key = webhook_key or os.environ.get("IFTTT_WEBHOOK_KEY", "").strip()
+    env_event = event_name or os.environ.get("IFTTT_EVENT_NAME", "").strip() or "crd_cloud_alert"
+
+    target_url, host, info = resolve_ifttt_webhook_url(
+        explicit_url=env_url,
+        webhook_key=env_key,
+        event_name=env_event,
+        allow_localhost_test=allow_localhost_test,
+    )
+    if not target_url:
+        return {"sent": False, "stage": stage, "reason": info}
+
+    def _clean(val: str, limit: int) -> str:
+        s = scrub_pii_text(str(val or "")).replace("\r", " ").replace("\n", " ").strip()
+        return re.sub(r"\s{2,}", " ", s)[:limit]
+
+    payload = {
+        "value1": _clean(value1, 160),
+        "value2": _clean(value2, 280),
+        "value3": _clean(value3, 280),
+    }
+    req = urllib.request.Request(
+        target_url,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json; charset=utf-8", "User-Agent": "CRD-Cloud-Runner/1.0"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return {"sent": True, "stage": stage, "host": host, "event": info, "httpStatus": resp.status}
+    except Exception as exc:
+        return {"sent": False, "stage": stage, "host": host, "event": info, "error": f"{type(exc).__name__}"}
+
+
 def emit_cloud_heartbeat(gateway_url: str, token: str) -> Dict[str, Any]:
     return gas_post(
         gateway_url,
@@ -661,10 +743,12 @@ def dispatch_return_callback(
     claim_info: Dict[str, Any],
     callback_prompt: str = "",
     run_url: str = "",
+    ifttt_url: str = "",
+    allow_ifttt_localhost: bool = False,
 ) -> Dict[str, Any]:
     """
-    After execution completes, reports results back to GAS + Google Trackers
-    and optionally executes/dispatches a bounded return callback script.
+    After execution completes, reports results back to GAS + Google Trackers,
+    fires Stage-2 IFTTT Maker Webhook alert, and runs bounded return callback script.
     """
     job_id = str(job.get("jobId") or "").strip()
     task_id = str(job.get("taskId") or job_id or "CLOUD-JOB").strip()
@@ -789,6 +873,16 @@ def dispatch_return_callback(
                     "execution": cb_exec,
                 }
 
+    icon = "✅" if final_status == "DONE" else "❌"
+    ifttt_done = notify_ifttt_webhook(
+        stage=final_status,
+        value1=f"{icon} [{final_status}] {job_id} ({exec_res.get('handler', 'AUTO')})",
+        value2=f"{exec_res.get('summary', '')} | Callback={callback_result.get('status', 'NONE')} | Paper=0",
+        value3=run_url or exec_res.get("output_pdf", "") or "CRD Cloud Runner",
+        explicit_url=ifttt_url,
+        allow_localhost_test=allow_ifttt_localhost,
+    )
+
     report_entry = {
         "jobId": job_id,
         "taskId": task_id,
@@ -798,6 +892,7 @@ def dispatch_return_callback(
         "logAck": bool(log_ack.get("success")),
         "trackerUpdate": tracker_update,
         "callback": callback_result,
+        "iftttDone": ifttt_done,
         "completedAtIso": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     _write_json_file(CALLBACK_REPORT_FILE, report_entry)
@@ -806,6 +901,7 @@ def dispatch_return_callback(
         "completeResponse": complete_ack,
         "callback": callback_result,
         "trackerUpdate": tracker_update,
+        "iftttDone": ifttt_done,
     }
 
 
@@ -822,9 +918,12 @@ def write_github_step_summary(report: Dict[str, Any]) -> None:
         ex = item.get("execution") or {}
         cb = item.get("callback") or {}
         ack = item.get("receiverAck") or {}
+        ifttt_ack = (item.get("iftttAck") or {}).get("sent", False)
+        ifttt_done = (item.get("iftttDone") or {}).get("sent", False)
         lines.append(
             f"- **{item.get('jobId')}** -> `{ex.get('status', item.get('status', 'UNKNOWN'))}` "
-            f"| ACK=`{ack.get('ackVerified', 'N/A')}` | Callback=`{cb.get('status', 'NONE')}`"
+            f"| ACK=`{ack.get('ackVerified', 'N/A')}` | Callback=`{cb.get('status', 'NONE')}` "
+            f"| IFTTT(ACK/DONE)=`{ifttt_ack}/{ifttt_done}`"
         )
         if ex.get("summary"):
             lines.append(f"  - สรุป: {ex['summary']}")
@@ -848,10 +947,12 @@ def run_cloud_cycle(
     issue_body: str = "",
     dry_run: bool = False,
     skip_gateway: bool = False,
+    ifttt_url: str = "",
+    allow_ifttt_localhost: bool = False,
 ) -> Dict[str, Any]:
     """
     Executes one Cloud Runner cycle:
-      - If issue_number is provided (owner-opened [CRD] Issue), posts Stage-1 ACK, executes, posts Stage-2 Result & Return Callback.
+      - If issue_number is provided (owner-opened [CRD] Issue), posts Stage-1 ACK (+ IFTTT ACK), executes, posts Stage-2 Result & Return Callback (+ IFTTT DONE).
       - If direct_prompt is provided, runs directly and runs optional callbackPrompt return step.
       - If event_payload contains a job (from repository_dispatch), verifies receiver ACK -> executes -> fires Return Callback.
       - Otherwise polls GET_PENDING_JOBS?lane=CLOUD_ONLY from GAS -> Claim+ACK -> Execute -> Return Callback.
@@ -888,6 +989,18 @@ def run_cloud_cycle(
             "claimedBy": RUNNER_WORKER_ID,
             "claimedAtIso": started_iso,
         }
+        ifttt_ack = (
+            {"sent": False, "stage": "ACK", "reason": "DRY_RUN_SKIPPED"}
+            if dry_run
+            else notify_ifttt_webhook(
+                stage="ACK",
+                value1=f"⏳ [ACK] {job_id} | {synthetic_job['title'][:60]}",
+                value2=f"รับงานสำเร็จ ({RUNNER_WORKER_ID}) กำลังรันบน Cloud (Paper=0)",
+                value3=run_url or "CRD Cloud Runner",
+                explicit_url=ifttt_url,
+                allow_localhost_test=allow_ifttt_localhost,
+            )
+        )
         if issue_number:
             post_github_issue_comment(
                 issue_number,
@@ -898,7 +1011,7 @@ def run_cloud_cycle(
 
         exec_res = execute_cloud_job(synthetic_job, dry_run=dry_run)
         cb_bundle = (
-            {"completeAck": False, "callback": {"status": "DRY_RUN_SKIPPED"}}
+            {"completeAck": False, "callback": {"status": "DRY_RUN_SKIPPED"}, "iftttDone": {"sent": False, "stage": "DONE", "reason": "DRY_RUN_SKIPPED"}}
             if dry_run
             else dispatch_return_callback(
                 gateway_url="",
@@ -908,6 +1021,8 @@ def run_cloud_cycle(
                 claim_info=claim_info,
                 callback_prompt=effective_callback,
                 run_url=run_url,
+                ifttt_url=ifttt_url,
+                allow_ifttt_localhost=allow_ifttt_localhost,
             )
         )
         issue_done_comment: Dict[str, Any] = {}
@@ -938,8 +1053,10 @@ def run_cloud_cycle(
             {
                 "jobId": job_id,
                 "receiverAck": claim_info,
+                "iftttAck": ifttt_ack,
                 "execution": exec_res,
                 "callback": cb_bundle.get("callback"),
+                "iftttDone": cb_bundle.get("iftttDone"),
                 "issueComment": issue_done_comment,
             }
         )
@@ -1024,6 +1141,15 @@ def run_cloud_cycle(
                 )
                 continue
 
+        ifttt_ack = notify_ifttt_webhook(
+            stage="ACK",
+            value1=f"⏳ [ACK] {job_id} | {str(job.get('title', ''))[:60]}",
+            value2=f"รับงานสำเร็จ ({RUNNER_WORKER_ID}) กำลังดำเนินการ (Paper=0)",
+            value3=run_url or "CRD Cloud Runner",
+            explicit_url=ifttt_url,
+            allow_localhost_test=allow_ifttt_localhost,
+        )
+
         try:
             exec_res = execute_cloud_job(job, dry_run=False)
         except Exception as exc:
@@ -1042,6 +1168,8 @@ def run_cloud_cycle(
             claim_info=claim_info,
             callback_prompt=callback_prompt,
             run_url=run_url,
+            ifttt_url=ifttt_url,
+            allow_ifttt_localhost=allow_ifttt_localhost,
         )
         results.append(
             {
@@ -1052,9 +1180,11 @@ def run_cloud_cycle(
                     "ackVerified": claim_info.get("ackVerified"),
                     "method": claim_info.get("method"),
                 },
+                "iftttAck": ifttt_ack,
                 "execution": exec_res,
                 "completeAck": cb_bundle.get("completeAck", False),
                 "callback": cb_bundle.get("callback"),
+                "iftttDone": cb_bundle.get("iftttDone"),
             }
         )
 
@@ -1181,6 +1311,7 @@ def run_self_test() -> Dict[str, Any]:
         "heartbeats": [],
         "logs": [],
         "callbacks": [],
+        "ifttt_events": [],
     }
     expected_token = "MOCK-SECRET-TOKEN"
 
@@ -1215,6 +1346,9 @@ def run_self_test() -> Dict[str, Any]:
         def do_POST(self):
             length = int(self.headers.get("Content-Length", "0"))
             body = json.loads(self.rfile.read(length).decode("utf-8"))
+            if self.path.startswith("/trigger/"):
+                mock_state["ifttt_events"].append(body)
+                return self._json(200, {"status": "Congratulations! You've fired the event"})
             if body.get("token") != expected_token:
                 return self._json(401, {"success": False, "error": "Unauthorized"})
             action = body.get("action")
@@ -1259,7 +1393,13 @@ def run_self_test() -> Dict[str, Any]:
     thr.start()
     try:
         gw = f"http://127.0.0.1:{port}/exec"
-        report = run_cloud_cycle(gw, token=expected_token)
+        mock_ifttt = f"http://127.0.0.1:{port}/trigger/crd_cloud_alert/with/key/TEST-IFTTT-SECRET"
+        report = run_cloud_cycle(
+            gw,
+            token=expected_token,
+            ifttt_url=mock_ifttt,
+            allow_ifttt_localhost=True,
+        )
         assert report["heartbeat_ok"] is True
         assert report["pending_fetch_ok"] is True
         assert report["paper_printed"] == 0
@@ -1270,6 +1410,16 @@ def run_self_test() -> Dict[str, Any]:
         assert mock_state["completedJobs"][0]["trackerUpdate"]["sheetStatus"] == "เสร็จแล้ว"
         assert len(mock_state["callbacks"]) == 1
         assert report["results"][0]["callback"]["status"] == "DISPATCHED_VIA_GAS"
+        # Verify IFTTT 2-stage alerts (ACK + DONE) fired cleanly without leaking secret key
+        assert len(mock_state["ifttt_events"]) == 2
+        assert "[ACK]" in mock_state["ifttt_events"][0]["value1"]
+        assert "[DONE]" in mock_state["ifttt_events"][1]["value1"]
+        assert "TEST-IFTTT-SECRET" not in json.dumps(report)
+        # Ensure IFTTT SSRF host guard rejects non-maker.ifttt.com URLs and scrubs PII
+        bad_ifttt = notify_ifttt_webhook("TEST", "v1", explicit_url="https://evil.example.com/trigger/x/with/key/k")
+        assert bad_ifttt["sent"] is False and bad_ifttt["reason"] == "INVALID_IFTTT_HOST"
+        notify_ifttt_webhook("PII_TEST", "บัตร 1100200300405", explicit_url=mock_ifttt, allow_localhost_test=True)
+        assert "[REDACTED_ID]" in mock_state["ifttt_events"][-1]["value1"]
         # Ensure locked job was rejected safely & CMS2_LOCAL job remained untouched!
         rejected = claim_job_with_ack(gw, "CLOUD-LOCKED-003", token=expected_token)
         assert rejected["claimed"] is False and rejected["ackVerified"] is False
@@ -1296,7 +1446,7 @@ def run_self_test() -> Dict[str, Any]:
             "### คำสั่งงาน (Prompt)\n\nสร้างใบนำส่ง A4\n\n### คำสั่งรันกลับหลังงานเสร็จ (Callback - ถ้ามี)\n\nตรวจระบบ parity SHA-256",
         )
         assert p2 == "สร้างใบนำส่ง A4" and cb2 == "ตรวจระบบ parity SHA-256"
-        checks += 6
+        checks += 9
     finally:
         srv.shutdown()
         srv.server_close()

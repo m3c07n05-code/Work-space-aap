@@ -45,6 +45,9 @@ jobs:
       CRD_GATEWAY_URL: ${{ vars.CRD_GATEWAY_URL || 'https://script.google.com/macros/s/AKfycbwTEboyfHQ0LzmrP0mtxWCYtrg13Jz5JqKpLVW-8Dtf3bWYqoc-ZoPObtZGjSlKriBU/exec' }}
       CRD_GATEWAY_TOKEN: ${{ secrets.CRD_GATEWAY_TOKEN }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      IFTTT_WEBHOOK_URL: ${{ secrets.IFTTT_WEBHOOK_URL }}
+      IFTTT_WEBHOOK_KEY: ${{ secrets.IFTTT_WEBHOOK_KEY }}
+      IFTTT_EVENT_NAME: ${{ vars.IFTTT_EVENT_NAME || 'crd_cloud_alert' }}
       CRD_EVENT_NAME: ${{ github.event_name }}
       CRD_EVENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
       CRD_INPUT_PROMPT: ${{ github.event.inputs.prompt }}
