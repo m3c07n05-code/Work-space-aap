@@ -20,13 +20,15 @@ import { AICommandDispatcher } from './components/AICommandDispatcher';
 import { GeminiChatbotView } from './components/GeminiChatbotView';
 import { CrdArchitecture3DView } from './components/CrdArchitecture3DView';
 import { Work4LetterPrintStudio } from './components/Work4LetterPrintStudio';
+import { Work1AndBackupStudio } from './components/Work1AndBackupStudio';
 import { LiquidNavbar, NimbusIcons, LiquidNavItem } from './components/ui/liquid-glass-navbar';
 import { backendGateway } from './services/backendGateway';
-import { GatewayConfig } from './types';
+import { GatewayConfig, ManifestModule } from './types';
 import { Terminal, ArrowLeft } from 'lucide-react';
 
 export type ActiveTabType =
   | 'overview'
+  | 'work1'
   | 'work4-studio'
   | 'ai-chat'
   | '3d-view'
@@ -46,8 +48,20 @@ export default function App() {
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [logCount, setLogCount] = useState(backendGateway.getLogs().length);
   const [scopesCount, setScopesCount] = useState(backendGateway.getScopes().length);
+  const [manifestModules, setManifestModules] = useState<ManifestModule[]>(
+    backendGateway.getManifest()?.modules || []
+  );
 
   useEffect(() => {
+    const currentCfg = backendGateway.getConfig();
+    if (currentCfg.baseUrl && !currentCfg.isSimulationMode) {
+      backendGateway.readManifest().then((res) => {
+        if (res.success && res.manifest?.modules) {
+          setManifestModules(res.manifest.modules);
+        }
+      });
+    }
+
     const unsubConfig = backendGateway.onConfigChange((newConfig) => {
       setConfig(newConfig);
     });
@@ -57,10 +71,16 @@ export default function App() {
     const unsubScopes = backendGateway.onScopeChange((scopes) => {
       setScopesCount(scopes.length);
     });
+    const unsubManifest = backendGateway.onManifestChange((manifest) => {
+      if (manifest?.modules) {
+        setManifestModules(manifest.modules);
+      }
+    });
     return () => {
       unsubConfig();
       unsubLogs();
       unsubScopes();
+      unsubManifest();
     };
   }, []);
 
@@ -83,6 +103,7 @@ export default function App() {
       case 'ai-chat':
       case 'ai-studio':
         return 2;
+      case 'work1':
       case 'scope-builder':
       case 'proposed-work':
       case 'work4-studio':
@@ -164,6 +185,7 @@ export default function App() {
               <span>← กลับหน้าหลัก (Hub)</span>
             </button>
             <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
+              {activeTab === 'work1' && 'WORK 1: ตาราง 13 คอลัมน์ & สำรอง Drive 3D'}
               {activeTab === 'work4-studio' && 'WORK 4: ห้องควบคุมงานพิมพ์จดหมาย 9 หมวด & EMS'}
               {activeTab === 'ai-chat' && 'Gemini AI Chatbot (Multi-Turn)'}
               {activeTab === '3d-view' && 'Three.js 3D CRD Architecture'}
@@ -188,6 +210,13 @@ export default function App() {
             onOpenExportModal={() => setIsExportModalOpen(true)}
             theme={theme}
           />
+        )}
+
+        {/* View 1-W1: WORK 1 13-Col Export & 3D GlassFolder Drive Backup */}
+        {activeTab === 'work1' && (
+          <div className="space-y-6 animate-fade-in">
+            <Work1AndBackupStudio theme={theme} />
+          </div>
         )}
 
         {/* View 1A: Dedicated WORK 4 Monthly Letter & EMS Printing Control Room */}
@@ -266,12 +295,13 @@ export default function App() {
               ? 'bg-white/95 hover:bg-slate-50 border-blue-200 text-[#14243A]'
               : 'bg-[#0e1626]/95 hover:bg-slate-800 border-teal-500/40 text-slate-200'
           }`}
+          title={`ดูประวัติการส่งคำสั่งและโมดูลจริงจาก 00_Project_Manifest.json (${manifestModules.length} Modules)`}
         >
           <Terminal className="w-4 h-4 text-blue-600 dark:text-teal-400" />
           <span className="font-semibold">Live Payloads</span>
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
           <span className="px-1.5 py-0.5 rounded-md bg-blue-50 dark:bg-slate-800 text-blue-700 dark:text-teal-300 font-mono text-[11px] font-bold">
-            {logCount}
+            {manifestModules.length > 0 ? manifestModules.length : logCount}
           </span>
         </button>
       </div>
@@ -308,6 +338,7 @@ export default function App() {
       <PayloadLogsModal
         isOpen={isLogsModalOpen}
         onClose={() => setIsLogsModalOpen(false)}
+        manifestModules={manifestModules}
       />
 
       <ExportCodeModal

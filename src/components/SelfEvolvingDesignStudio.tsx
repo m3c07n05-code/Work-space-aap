@@ -56,6 +56,8 @@ export const SelfEvolvingDesignStudio: React.FC<SelfEvolvingDesignStudioProps> =
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   const [savedToDrive, setSavedToDrive] = useState(false);
   const [isSavingToDrive, setIsSavingToDrive] = useState(false);
+  const [isSubmittingJob, setIsSubmittingJob] = useState(false);
+  const [dispatchNotice, setDispatchNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [pinnedToApp, setPinnedToApp] = useState(false);
   const [previewActionToast, setPreviewActionToast] = useState<string | null>(null);
 
@@ -171,6 +173,7 @@ export const SelfEvolvingDesignStudio: React.FC<SelfEvolvingDesignStudioProps> =
   const handleSaveToDrive = async () => {
     if (!designResult || isSavingToDrive) return;
     setIsSavingToDrive(true);
+    setDispatchNotice(null);
     try {
       const res = await backendGateway.dispatchAction('DEPLOY_EVOLVED_UI_DESIGN', {
         componentId: designResult.componentId,
@@ -196,15 +199,73 @@ export const SelfEvolvingDesignStudio: React.FC<SelfEvolvingDesignStudioProps> =
 
       if (res.success && res.log.response?.manifestUpdated === true) {
         setSavedToDrive(true);
+        const cfg = backendGateway.getConfig();
+        if (cfg.baseUrl && !cfg.isSimulationMode) {
+          const readback = await backendGateway.readManifest();
+          setDispatchNotice({
+            ok: readback.success,
+            text: readback.success
+              ? `บันทึกสเปก ${designResult.componentId} และอ่านกลับ 00_Project_Manifest.json สำเร็จ (${readback.manifest?.modules?.length ?? 0} โมดูล)`
+              : `บันทึกสำเร็จแล้ว แต่อ่านกลับ Manifest ไม่สำเร็จ: ${readback.error || 'Unknown'}`,
+          });
+        } else {
+          setDispatchNotice({ ok: true, text: `บันทึกสเปก ${designResult.componentId} ในโหมดจำลองแล้ว` });
+        }
         setTimeout(() => setSavedToDrive(false), 5000);
       } else {
         setSavedToDrive(false);
+        const errMsg = String(res.log.response?.error || 'ยังไม่ได้ตั้งค่า Gateway URL หรือ Token ไม่ถูกต้อง');
+        setDispatchNotice({ ok: false, text: `ไม่สามารถบันทึกลง Manifest: ${errMsg}` });
       }
     } catch (err) {
       console.error('Failed to save spec to Drive:', err);
       setSavedToDrive(false);
+      setDispatchNotice({
+        ok: false,
+        text: err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการเชื่อมต่อ Gateway',
+      });
     } finally {
       setIsSavingToDrive(false);
+    }
+  };
+
+  const handleSubmitCloudJob = async () => {
+    if (!designResult || isSubmittingJob) return;
+    setIsSubmittingJob(true);
+    setDispatchNotice(null);
+    try {
+      const res = await backendGateway.dispatchAction('SUBMIT_JOB', {
+        executionLane: 'CLOUD_ONLY',
+        type: 'CLOUD_DISPATCH',
+        taskId: `UI-${designResult.componentId}`,
+        title: `[UI Evolution] ${designResult.title}`.slice(0, 120),
+        promptText: `${designResult.actionPrompt}\nEXECUTION_LANE: CLOUD_ONLY`,
+        callbackPrompt: `ตรวจสอบโค้ดและ parity SHA-256 หลังเพิ่ม ${designResult.componentId}`,
+        source: 'WEB_SELF_EVOLVING_STUDIO',
+      });
+
+      if (res.success) {
+        const jobId = String(res.log.response?.jobId || 'QUEUED');
+        const lane = String(res.log.response?.executionLane || 'CLOUD_ONLY');
+        const cfg = backendGateway.getConfig();
+        if (cfg.baseUrl && !cfg.isSimulationMode) {
+          await backendGateway.readManifest();
+        }
+        setDispatchNotice({
+          ok: true,
+          text: `ส่งคิว Cloud Runner (${jobId} · ${lane}) และอัปเดต Manifest เรียบร้อยแล้ว`,
+        });
+      } else {
+        const errMsg = String(res.log.response?.error || 'ยังไม่ได้ตั้งค่า Gateway URL หรือ Token ไม่ถูกต้อง');
+        setDispatchNotice({ ok: false, text: `ส่งคิว Cloud Runner ไม่สำเร็จ: ${errMsg}` });
+      }
+    } catch (err) {
+      setDispatchNotice({
+        ok: false,
+        text: err instanceof Error ? err.message : 'ไม่สามารถส่งคิว Cloud Runner ได้',
+      });
+    } finally {
+      setIsSubmittingJob(false);
     }
   };
 
@@ -484,6 +545,25 @@ export const SelfEvolvingDesignStudio: React.FC<SelfEvolvingDesignStudioProps> =
             </div>
           </div>
 
+          {dispatchNotice && (
+            <div
+              className={`p-3 rounded-xl border text-xs font-mono flex items-center justify-between gap-2 ${
+                dispatchNotice.ok
+                  ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
+                  : 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-300'
+              }`}
+            >
+              <span>{dispatchNotice.text}</span>
+              <button
+                type="button"
+                onClick={onOpenLogsModal}
+                className="underline font-bold shrink-0 cursor-pointer"
+              >
+                ดูผลใน Manifest
+              </button>
+            </div>
+          )}
+
           {/* 1-Click Action Buttons */}
           <div className="flex flex-wrap items-center justify-end gap-3 pt-2">
             <button
@@ -498,6 +578,25 @@ export const SelfEvolvingDesignStudio: React.FC<SelfEvolvingDesignStudioProps> =
             >
               {pinnedToApp ? <Check className="w-4 h-4 text-emerald-600" /> : <Pin className="w-4 h-4 text-blue-600" />}
               <span>{pinnedToApp ? 'ผนวกเข้าใช้งานในแอปแล้ว' : '📌 ผนวกดีไซน์นี้เข้าใช้งานในแอปทันที'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleSubmitCloudJob}
+              disabled={isSubmittingJob}
+              className="px-4 py-2.5 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 text-xs font-bold flex items-center gap-2 cursor-pointer transition-all shadow-2xs"
+            >
+              {isSubmittingJob ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin text-indigo-600" />
+                  <span>กำลังส่ง Cloud Runner...</span>
+                </>
+              ) : (
+                <>
+                  <Send className="w-4 h-4 text-indigo-600" />
+                  <span>ส่งคิว Cloud Runner &amp; ตีกลับ</span>
+                </>
+              )}
             </button>
 
             <LiquidButton

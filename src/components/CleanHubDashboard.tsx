@@ -25,6 +25,7 @@ interface CleanHubDashboardProps {
   logCount: number;
   onNavigate: (
     view:
+      | 'work1'
       | 'work4-studio'
       | 'ai-chat'
       | '3d-view'
@@ -49,6 +50,18 @@ export const CleanHubDashboard: React.FC<CleanHubDashboardProps> = ({
   onOpenExportModal,
 }) => {
   const menuCards = [
+    {
+      id: 'work1',
+      title: 'WORK 1: ตาราง 13 คอลัมน์ & 3D GlassFolder Backup',
+      desc: 'ส่งออก CSV 13 คอลัมน์ (BOM UTF-8 + กัน Formula Injection) และสำรอง WORK 1–9 ลง Drive แบบ Zero-PII 5 หลัก',
+      badge: 'WORK 1–9 · 13-Col',
+      badgeColor: 'bg-white/85 text-emerald-900 border-slate-200/90 font-bold',
+      icon: <Layers className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />,
+      onClick: () => onNavigate('work1'),
+      actionText: 'เปิด WORK 1 & 3D Backup',
+      hasHighlight: true,
+      highlightTag: 'ZERO-PII 100%',
+    },
     {
       id: 'work4-studio',
       title: 'WORK 4: ห้องควบคุมงานพิมพ์จดหมาย 9 หมวด & EMS',
