@@ -24,7 +24,8 @@ on:
     - cron: "0 */2 * * *"
 
 concurrency:
-  group: crd-cloud-runner
+  group: >-
+    ${{ github.event_name == 'issues' && format('crd-issue-{0}', github.event.issue.number) || (github.event_name == 'schedule' && 'crd-cloud-schedule' || format('crd-run-{0}', github.run_id)) }}
   cancel-in-progress: false
 
 permissions:
