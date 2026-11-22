@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     CRD Automated Split Monthly Follow-up & Payment History Integration (Follower 077)
     Enforces Day 20 Cut-off Rule & Zero-PII Compliance.

@@ -1,0 +1,134 @@
+name: CRD Cloud Runner (Autonomous Executor)
+
+on:
+  repository_dispatch:
+    types: [crd-cloud-job, crd-cloud-callback]
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "คำสั่งงานภาษาไทย/อังกฤษ (ปล่อยว่างเพื่อดึงคิว PENDING จาก GAS)"
+        required: false
+        default: ""
+      callback_prompt:
+        description: "คำสั่งรันกลับหลังงานแรกเสร็จ (ตัวเลือกเสริม เช่น ตรวจระบบ parity SHA-256)"
+        required: false
+        default: ""
+      dry_run:
+        description: "ทดสอบแบบ Dry-Run (ไม่แก้คิวใน GAS)"
+        type: boolean
+        required: false
+        default: false
+  issues:
+    types: [opened]
+  schedule:
+    - cron: "0 */2 * * *"
+
+concurrency:
+  group: >-
+    ${{ github.event_name == 'issues' && format('crd-issue-{0}', github.event.issue.number) || (github.event_name == 'schedule' && 'crd-cloud-schedule' || format('crd-run-{0}', github.run_id)) }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  cloud-runner:
+    if: >-
+      github.event_name != 'issues' ||
+      (github.event.issue.user.login == github.repository_owner &&
+       startsWith(github.event.issue.title, '[CRD]'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CRD_GATEWAY_URL: ${{ vars.CRD_GATEWAY_URL || 'https://script.google.com/macros/s/AKfycbwTEboyfHQ0LzmrP0mtxWCYtrg13Jz5JqKpLVW-8Dtf3bWYqoc-ZoPObtZGjSlKriBU/exec' }}
+      CRD_GATEWAY_TOKEN: ${{ secrets.CRD_GATEWAY_TOKEN }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      IFTTT_WEBHOOK_URL: ${{ secrets.IFTTT_WEBHOOK_URL }}
+      IFTTT_WEBHOOK_KEY: ${{ secrets.IFTTT_WEBHOOK_KEY }}
+      IFTTT_EVENT_NAME: ${{ vars.IFTTT_EVENT_NAME || 'crd_cloud_alert' }}
+      CRD_EVENT_NAME: ${{ github.event_name }}
+      CRD_EVENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
+      CRD_INPUT_PROMPT: ${{ github.event.inputs.prompt }}
+      CRD_INPUT_CALLBACK_PROMPT: ${{ github.event.inputs.callback_prompt }}
+      CRD_INPUT_DRY_RUN: ${{ github.event.inputs.dry_run }}
+      CRD_ISSUE_NUMBER: ${{ github.event.issue.number }}
+      CRD_ISSUE_TITLE: ${{ github.event.issue.title }}
+      CRD_ISSUE_BODY: ${{ github.event.issue.body }}
+
+    steps:
+      - name: Lightweight preflight gate (skip idle scheduled runs)
+        id: preflight
+        run: |
+          if [ "$CRD_EVENT_NAME" = "schedule" ]; then
+            if [ -z "$CRD_GATEWAY_TOKEN" ]; then
+              echo "Scheduled check skipped: CRD_GATEWAY_TOKEN is not set (zero idle load)."
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            PENDING=$(curl -sL --max-time 15 -G "$CRD_GATEWAY_URL" \
+              --data-urlencode "action=GET_PENDING_JOBS" \
+              --data-urlencode "lane=CLOUD_ONLY" \
+              --data-urlencode "workerId=GITHUB-CLOUD-RUNNER" \
+              --data-urlencode "token=$CRD_GATEWAY_TOKEN" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('jobs',[])) if d.get('success') else 0)" 2>/dev/null || echo "0")
+            if [ "$PENDING" = "0" ]; then
+              echo "Scheduled check skipped: 0 pending CLOUD_ONLY jobs (zero idle load)."
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout repository
+        if: steps.preflight.outputs.should_run == 'true'
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        if: steps.preflight.outputs.should_run == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python runtime dependency (Pillow)
+        if: steps.preflight.outputs.should_run == 'true'
+        run: python3 -m pip install --quiet pillow
+
+      - name: Run Cloud Runner self-tests
+        if: steps.preflight.outputs.should_run == 'true'
+        run: python3 -B scripts/cloud_runner.py --self-test
+
+      - name: Execute Cloud Runner job cycle
+        if: steps.preflight.outputs.should_run == 'true'
+        run: |
+          DRY_FLAG=""
+          if [ "$CRD_INPUT_DRY_RUN" = "true" ]; then
+            DRY_FLAG="--dry-run"
+          fi
+
+          if [ -n "$CRD_ISSUE_NUMBER" ]; then
+            python3 -B scripts/cloud_runner.py $DRY_FLAG
+          elif [ -n "$CRD_INPUT_PROMPT" ]; then
+            python3 -B scripts/cloud_runner.py --prompt "$CRD_INPUT_PROMPT" $DRY_FLAG
+          elif [ -n "$CRD_EVENT_PAYLOAD" ] && [ "$CRD_EVENT_PAYLOAD" != "null" ]; then
+            python3 -B scripts/cloud_runner.py $DRY_FLAG
+          elif [ -z "$CRD_GATEWAY_TOKEN" ]; then
+            echo "CRD_GATEWAY_TOKEN secret is not configured; running offline system audit."
+            python3 -B scripts/cloud_runner.py --offline-audit
+          else
+            python3 -B scripts/cloud_runner.py $DRY_FLAG
+          fi
+
+      - name: Upload Cloud Runner report & generated outputs
+        if: always() && steps.preflight.outputs.should_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: crd-cloud-runner-report-${{ github.run_id }}
+          path: |
+            runtime/cloud_runner_report.json
+            runtime/callback_report.json
+            output/*.pdf
+            output/*.png
+          if-no-files-found: ignore
+          retention-days: 14
