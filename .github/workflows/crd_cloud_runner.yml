@@ -46,6 +46,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install Python runtime dependency (Pillow)
+        run: python3 -m pip install --quiet pillow
+
       - name: Run Cloud Runner self-tests
         run: python3 -B scripts/cloud_runner.py --self-test
 
