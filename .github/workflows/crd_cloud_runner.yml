@@ -2,11 +2,15 @@ name: CRD Cloud Runner (Autonomous Executor)
 
 on:
   repository_dispatch:
-    types: [crd-cloud-job]
+    types: [crd-cloud-job, crd-cloud-callback]
   workflow_dispatch:
     inputs:
       prompt:
         description: "คำสั่งงานภาษาไทย/อังกฤษ (ปล่อยว่างเพื่อดึงคิว PENDING จาก GAS)"
+        required: false
+        default: ""
+      callback_prompt:
+        description: "คำสั่งรันกลับหลังงานแรกเสร็จ (ตัวเลือกเสริม เช่น ตรวจระบบ parity SHA-256)"
         required: false
         default: ""
       dry_run:
@@ -14,6 +18,8 @@ on:
         type: boolean
         required: false
         default: false
+  issues:
+    types: [opened]
   schedule:
     - cron: "*/15 * * * *"
 
@@ -23,19 +29,30 @@ concurrency:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   cloud-runner:
+    if: >-
+      github.event_name != 'issues' ||
+      (github.event.issue.user.login == github.repository_owner &&
+       startsWith(github.event.issue.title, '[CRD]'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
       PYTHONDONTWRITEBYTECODE: "1"
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CRD_GATEWAY_URL: ${{ vars.CRD_GATEWAY_URL || 'https://script.google.com/macros/s/AKfycbwTEboyfHQ0LzmrP0mtxWCYtrg13Jz5JqKpLVW-8Dtf3bWYqoc-ZoPObtZGjSlKriBU/exec' }}
       CRD_GATEWAY_TOKEN: ${{ secrets.CRD_GATEWAY_TOKEN }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      CRD_EVENT_NAME: ${{ github.event_name }}
       CRD_EVENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
       CRD_INPUT_PROMPT: ${{ github.event.inputs.prompt }}
+      CRD_INPUT_CALLBACK_PROMPT: ${{ github.event.inputs.callback_prompt }}
       CRD_INPUT_DRY_RUN: ${{ github.event.inputs.dry_run }}
+      CRD_ISSUE_NUMBER: ${{ github.event.issue.number }}
+      CRD_ISSUE_TITLE: ${{ github.event.issue.title }}
+      CRD_ISSUE_BODY: ${{ github.event.issue.body }}
 
     steps:
       - name: Checkout repository
@@ -54,21 +71,22 @@ jobs:
 
       - name: Execute Cloud Runner job cycle
         run: |
-          if [ -n "$CRD_INPUT_PROMPT" ]; then
-            if [ "$CRD_INPUT_DRY_RUN" = "true" ]; then
-              python3 -B scripts/cloud_runner.py --prompt "$CRD_INPUT_PROMPT" --dry-run
-            else
-              python3 -B scripts/cloud_runner.py --prompt "$CRD_INPUT_PROMPT"
-            fi
+          DRY_FLAG=""
+          if [ "$CRD_INPUT_DRY_RUN" = "true" ]; then
+            DRY_FLAG="--dry-run"
+          fi
+
+          if [ -n "$CRD_ISSUE_NUMBER" ]; then
+            python3 -B scripts/cloud_runner.py $DRY_FLAG
+          elif [ -n "$CRD_INPUT_PROMPT" ]; then
+            python3 -B scripts/cloud_runner.py --prompt "$CRD_INPUT_PROMPT" $DRY_FLAG
+          elif [ -n "$CRD_EVENT_PAYLOAD" ] && [ "$CRD_EVENT_PAYLOAD" != "null" ]; then
+            python3 -B scripts/cloud_runner.py $DRY_FLAG
           elif [ -z "$CRD_GATEWAY_TOKEN" ]; then
             echo "CRD_GATEWAY_TOKEN secret is not configured; running offline system audit."
             python3 -B scripts/cloud_runner.py --offline-audit
           else
-            if [ "$CRD_INPUT_DRY_RUN" = "true" ]; then
-              python3 -B scripts/cloud_runner.py --dry-run
-            else
-              python3 -B scripts/cloud_runner.py
-            fi
+            python3 -B scripts/cloud_runner.py $DRY_FLAG
           fi
 
       - name: Upload Cloud Runner report & generated outputs
@@ -78,6 +96,7 @@ jobs:
           name: crd-cloud-runner-report-${{ github.run_id }}
           path: |
             runtime/cloud_runner_report.json
+            runtime/callback_report.json
             output/*.pdf
             output/*.png
           if-no-files-found: ignore

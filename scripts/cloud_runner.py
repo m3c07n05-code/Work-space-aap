@@ -42,13 +42,16 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 RUNTIME_DIR = REPO_ROOT / "runtime"
 REPORT_FILE = RUNTIME_DIR / "cloud_runner_report.json"
+CALLBACK_REPORT_FILE = RUNTIME_DIR / "callback_report.json"
 
 DEFAULT_GAS_GATEWAY_URL = (
     "https://script.google.com/macros/s/"
     "AKfycbwTEboyfHQ0LzmrP0mtxWCYtrg13Jz5JqKpLVW-8Dtf3bWYqoc-ZoPObtZGjSlKriBU/exec"
 )
+GITHUB_API_BASE = "https://api.github.com"
 RUNNER_DEVICE_ID = "github-cloud-runner"
 RUNNER_WORKER_ID = "GITHUB-CLOUD-RUNNER"
+MAX_CALLBACK_DEPTH = 2
 NO_AUTO_PRINT = True
 PAPER_PRINTED = 0
 
@@ -490,8 +493,60 @@ def execute_cloud_job(job: Dict[str, Any], dry_run: bool = False) -> Dict[str, A
 
 
 # ---------------------------------------------------------------------------
-# End-to-End Gateway Orchestration
+# End-to-End Gateway Orchestration (Receiver Read -> ACK -> Execute -> Return Callback)
 # ---------------------------------------------------------------------------
+
+
+def current_run_url() -> str:
+    server = os.environ.get("GITHUB_SERVER_URL", "https://github.com").rstrip("/")
+    repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    run_id = os.environ.get("GITHUB_RUN_ID", "").strip()
+    if repo and run_id:
+        return f"{server}/{repo}/actions/runs/{run_id}"
+    return ""
+
+
+def extract_callback_directive(prompt_text: str, explicit_callback: str = "") -> str:
+    """Extracts an optional follow-up return script command from explicit input or CALLBACK: line."""
+    if str(explicit_callback or "").strip():
+        return str(explicit_callback).strip()[:500]
+    match = re.search(
+        r"^(?:CALLBACK|RETURN_SCRIPT|NEXT_STEP)\s*:\s*(.+)$",
+        str(prompt_text or ""),
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    return match.group(1).strip()[:500] if match else ""
+
+
+def post_github_issue_comment(
+    issue_number: str | int,
+    body: str,
+    gh_token: str = "",
+    repo: str = "",
+) -> Dict[str, Any]:
+    """Posts a status / callback comment back to an owner-opened [CRD] GitHub Issue."""
+    if not issue_number or not gh_token or not repo:
+        return {"posted": False, "reason": "GITHUB_ISSUE_CONTEXT_NOT_SET"}
+    clean_body = scrub_pii_text(body)[:3500]
+    url = f"{GITHUB_API_BASE}/repos/{repo}/issues/{int(issue_number)}/comments"
+    req = urllib.request.Request(
+        url,
+        data=json.dumps({"body": clean_body}, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {gh_token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Content-Type": "application/json",
+            "User-Agent": "CRD-Cloud-Runner/1.0",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            parsed = json.loads(resp.read().decode("utf-8") or "{}")
+            return {"posted": True, "commentUrl": parsed.get("html_url", ""), "id": parsed.get("id")}
+    except Exception as exc:
+        return {"posted": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
 def emit_cloud_heartbeat(gateway_url: str, token: str) -> Dict[str, Any]:
@@ -510,44 +565,339 @@ def emit_cloud_heartbeat(gateway_url: str, token: str) -> Dict[str, Any]:
     )
 
 
+def claim_job_with_ack(gateway_url: str, job_id: str, token: str = "") -> Dict[str, Any]:
+    """
+    Claims a pending job and verifies receiver ACK:
+      - Tries POST CLAIM_JOB when token is configured; falls back to GET CLAIM_JOB only if token is unset.
+      - Confirms claimed=True, status=='IN_PROGRESS', and claimedBy==RUNNER_WORKER_ID.
+    """
+    if token:
+        claim_ack = gas_post(
+            gateway_url,
+            {"action": "CLAIM_JOB", "jobId": job_id, "workerId": RUNNER_WORKER_ID},
+            token=token,
+        )
+        method = "POST"
+    else:
+        claim_ack = gas_get(
+            gateway_url,
+            "CLAIM_JOB",
+            token="",
+            params={"jobId": job_id, "workerId": RUNNER_WORKER_ID},
+        )
+        method = "GET_NO_TOKEN_FALLBACK"
+
+    claimed_flag = bool(claim_ack.get("claimed"))
+    job_obj = claim_ack.get("job") if isinstance(claim_ack.get("job"), dict) else {}
+    status_ok = str(job_obj.get("status") or "").upper() == "IN_PROGRESS"
+    worker_ok = str(job_obj.get("claimedBy") or "") == RUNNER_WORKER_ID
+    ack_verified = claimed_flag and status_ok and worker_ok
+
+    return {
+        "claimed": claimed_flag,
+        "ackVerified": ack_verified,
+        "method": method,
+        "claimedBy": job_obj.get("claimedBy") or "",
+        "claimedAtIso": job_obj.get("claimedAtIso") or "",
+        "error": claim_ack.get("error", ""),
+        "raw": claim_ack,
+    }
+
+
+def dispatch_return_callback(
+    gateway_url: str,
+    token: str,
+    job: Dict[str, Any],
+    exec_res: Dict[str, Any],
+    claim_info: Dict[str, Any],
+    callback_prompt: str = "",
+    run_url: str = "",
+) -> Dict[str, Any]:
+    """
+    After execution completes, reports results back to GAS + Google Trackers
+    and optionally executes/dispatches a bounded return callback script.
+    """
+    job_id = str(job.get("jobId") or "").strip()
+    task_id = str(job.get("taskId") or job_id or "CLOUD-JOB").strip()
+    final_status = "DONE" if exec_res.get("status") == "DONE" else "FAILED"
+    current_depth = int(job.get("callbackDepth") or 0)
+    resolved_callback = extract_callback_directive(
+        str(job.get("promptText") or ""),
+        callback_prompt or str(job.get("callbackPrompt") or ""),
+    )
+
+    complete_summary = scrub_pii_text(
+        f"{exec_res.get('summary', '')} | แนะนำ: {exec_res.get('advisor', '')}"
+    )[:300]
+    advisor_note = scrub_pii_text(str(exec_res.get("advisor", "")))[:300]
+
+    tracker_update = {
+        "trackerSheetId": "15Pcrq0d4O5I4OZKRS64PcRiVtAHYTZ0JFATdFsCNx88",
+        "checkpointSheetId": "1SiUzkHZcKNfukRSnGBpeMZou1exbrSivlOo20T4pM40",
+        "taskId": task_id,
+        "jobId": job_id,
+        "sheetStatus": "เสร็จแล้ว" if final_status == "DONE" else "ติดขัด",
+        "summary": complete_summary,
+        "evidenceUrl": run_url,
+    }
+
+    complete_ack: Dict[str, Any] = {"skipped": True, "reason": "NO_GATEWAY_TOKEN"}
+    log_ack: Dict[str, Any] = {"skipped": True}
+    if gateway_url and token:
+        complete_ack = gas_post(
+            gateway_url,
+            {
+                "action": "COMPLETE_JOB",
+                "jobId": job_id,
+                "taskId": task_id,
+                "status": final_status,
+                "summary": complete_summary,
+                "advisorNote": advisor_note,
+                "executionLane": "CLOUD_ONLY",
+                "paperPrinted": 0,
+                "claimAckVerified": bool(claim_info.get("ackVerified")),
+                "runUrl": run_url,
+                "outputPdf": exec_res.get("output_pdf", ""),
+                "callbackPrompt": resolved_callback if current_depth < MAX_CALLBACK_DEPTH else "",
+                "callbackDepth": current_depth,
+                "trackerUpdate": tracker_update,
+            },
+            token=token,
+        )
+        log_ack = gas_post(
+            gateway_url,
+            {
+                "action": "LOG_UPDATE",
+                "actor": RUNNER_WORKER_ID,
+                "task": task_id,
+                "status": final_status,
+                "details": {
+                    "jobId": job_id,
+                    "handler": exec_res.get("handler"),
+                    "claimAckVerified": bool(claim_info.get("ackVerified")),
+                    "callbackRequested": bool(resolved_callback),
+                    "paperPrinted": 0,
+                    "runUrl": run_url,
+                },
+            },
+            token=token,
+        )
+
+    callback_result: Dict[str, Any] = {
+        "requested": bool(resolved_callback),
+        "callbackDepth": current_depth,
+        "status": "NONE",
+    }
+    if resolved_callback:
+        assert_zero_pii_text(resolved_callback, "callback_prompt")
+        if current_depth >= MAX_CALLBACK_DEPTH:
+            callback_result = {
+                "requested": True,
+                "callbackDepth": current_depth,
+                "status": "LOOP_GUARD_BLOCKED",
+                "reason": f"callbackDepth ({current_depth}) reached MAX_CALLBACK_DEPTH ({MAX_CALLBACK_DEPTH})",
+            }
+        elif final_status != "DONE":
+            callback_result = {
+                "requested": True,
+                "callbackDepth": current_depth,
+                "status": "SKIPPED_PRIMARY_NOT_DONE",
+            }
+        else:
+            cb_lane, cb_reason = classify_execution_lane(resolved_callback)
+            if cb_lane == "CMS2_LOCAL":
+                callback_result = {
+                    "requested": True,
+                    "callbackDepth": current_depth,
+                    "executionLane": cb_lane,
+                    "status": "ROUTED_TO_CMS2_LOCAL",
+                    "reason": cb_reason,
+                }
+            elif gateway_url and token and complete_ack.get("callbackDispatch", {}).get("triggered"):
+                callback_result = {
+                    "requested": True,
+                    "callbackDepth": current_depth + 1,
+                    "executionLane": "CLOUD_ONLY",
+                    "status": "DISPATCHED_VIA_GAS",
+                    "gasDispatch": complete_ack.get("callbackDispatch"),
+                }
+            else:
+                cb_job = {
+                    "jobId": f"{job_id}-CB{current_depth + 1}",
+                    "taskId": f"{task_id}-CB{current_depth + 1}",
+                    "title": resolved_callback[:120],
+                    "promptText": resolved_callback,
+                    "executionLane": "CLOUD_ONLY",
+                    "callbackDepth": current_depth + 1,
+                }
+                cb_exec = execute_cloud_job(cb_job, dry_run=False)
+                callback_result = {
+                    "requested": True,
+                    "callbackDepth": current_depth + 1,
+                    "executionLane": "CLOUD_ONLY",
+                    "status": "EXECUTED_IN_RUNNER",
+                    "jobId": cb_job["jobId"],
+                    "execution": cb_exec,
+                }
+
+    report_entry = {
+        "jobId": job_id,
+        "taskId": task_id,
+        "finalStatus": final_status,
+        "claimAckVerified": bool(claim_info.get("ackVerified")),
+        "completeAck": bool(complete_ack.get("success")),
+        "logAck": bool(log_ack.get("success")),
+        "trackerUpdate": tracker_update,
+        "callback": callback_result,
+        "completedAtIso": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    _write_json_file(CALLBACK_REPORT_FILE, report_entry)
+    return {
+        "completeAck": bool(complete_ack.get("success")),
+        "completeResponse": complete_ack,
+        "callback": callback_result,
+        "trackerUpdate": tracker_update,
+    }
+
+
+def write_github_step_summary(report: Dict[str, Any]) -> None:
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "").strip()
+    if not summary_path:
+        return
+    lines = [
+        "### ⚡ CRD Cloud Runner Summary",
+        f"- **Mode:** `{report.get('mode')}` | **Processed:** `{report.get('processed')}` | **Paper:** `0` (`NO_AUTO_PRINT`)",
+        f"- **Receiver Fetch OK:** `{report.get('pending_fetch_ok', 'N/A')}`",
+    ]
+    for item in report.get("results", []):
+        ex = item.get("execution") or {}
+        cb = item.get("callback") or {}
+        ack = item.get("receiverAck") or {}
+        lines.append(
+            f"- **{item.get('jobId')}** -> `{ex.get('status', item.get('status', 'UNKNOWN'))}` "
+            f"| ACK=`{ack.get('ackVerified', 'N/A')}` | Callback=`{cb.get('status', 'NONE')}`"
+        )
+        if ex.get("summary"):
+            lines.append(f"  - สรุป: {ex['summary']}")
+        if ex.get("advisor"):
+            lines.append(f"  - แนะนำ: {ex['advisor']}")
+    try:
+        with open(summary_path, "a", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+    except Exception:
+        pass
+
+
 def run_cloud_cycle(
     gateway_url: str,
     token: str = "",
     event_payload: Optional[Dict[str, Any]] = None,
     direct_prompt: str = "",
+    callback_prompt: str = "",
+    issue_number: str = "",
+    issue_title: str = "",
+    issue_body: str = "",
     dry_run: bool = False,
     skip_gateway: bool = False,
 ) -> Dict[str, Any]:
     """
     Executes one Cloud Runner cycle:
-      - If direct_prompt is provided (local/manual mode without GAS queue), runs directly.
-      - If event_payload contains a job (from repository_dispatch), processes that job first,
-        then drains any remaining CLOUD_ONLY pending jobs in GAS.
-      - Otherwise polls GET_PENDING_JOBS?lane=CLOUD_ONLY from GAS.
+      - If issue_number is provided (owner-opened [CRD] Issue), posts Stage-1 ACK, executes, posts Stage-2 Result & Return Callback.
+      - If direct_prompt is provided, runs directly and runs optional callbackPrompt return step.
+      - If event_payload contains a job (from repository_dispatch), verifies receiver ACK -> executes -> fires Return Callback.
+      - Otherwise polls GET_PENDING_JOBS?lane=CLOUD_ONLY from GAS -> Claim+ACK -> Execute -> Return Callback.
     """
     started_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     results: List[Dict[str, Any]] = []
+    run_url = current_run_url()
+    gh_token = os.environ.get("GITHUB_TOKEN", "").strip()
+    gh_repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
 
-    if direct_prompt:
+    effective_prompt = direct_prompt.strip()
+    if issue_number and not effective_prompt:
+        clean_title = re.sub(r"^\[CRD\]\s*", "", issue_title.strip(), flags=re.IGNORECASE)
+        effective_prompt = "\n".join(p for p in [clean_title, issue_body.strip()] if p).strip()
+
+    if effective_prompt:
+        mode = "GITHUB_ISSUE" if issue_number else "DIRECT_PROMPT"
+        job_id = f"CLOUD-ISSUE-{issue_number}" if issue_number else f"CLOUD-DIRECT-{int(time.time())}"
         synthetic_job = {
-            "jobId": f"CLOUD-DIRECT-{int(time.time())}",
-            "taskId": "CRD-CLOUD-DIRECT",
-            "title": direct_prompt[:120],
-            "promptText": direct_prompt,
+            "jobId": job_id,
+            "taskId": f"CRD-ISSUE-{issue_number}" if issue_number else "CRD-CLOUD-DIRECT",
+            "title": effective_prompt.splitlines()[0][:120],
+            "promptText": effective_prompt,
             "type": "CLOUD_DISPATCH",
+            "callbackDepth": 0,
         }
+        claim_info = {
+            "claimed": True,
+            "ackVerified": True,
+            "method": mode,
+            "claimedBy": RUNNER_WORKER_ID,
+            "claimedAtIso": started_iso,
+        }
+        if issue_number:
+            post_github_issue_comment(
+                issue_number,
+                f"⏳ **รับงานสำเร็จ (ACK Verified)** `{job_id}`\nกำลังรันบน GitHub Cloud Runner (`Paper=0`)...",
+                gh_token=gh_token,
+                repo=gh_repo,
+            )
+
         exec_res = execute_cloud_job(synthetic_job, dry_run=dry_run)
-        results.append({"jobId": synthetic_job["jobId"], "execution": exec_res})
+        cb_bundle = (
+            {"completeAck": False, "callback": {"status": "DRY_RUN_SKIPPED"}}
+            if dry_run
+            else dispatch_return_callback(
+                gateway_url="",
+                token="",
+                job=synthetic_job,
+                exec_res=exec_res,
+                claim_info=claim_info,
+                callback_prompt=callback_prompt,
+                run_url=run_url,
+            )
+        )
+        issue_done_comment: Dict[str, Any] = {}
+        if issue_number:
+            cb_status = cb_bundle.get("callback", {}).get("status", "NONE")
+            comment_lines = [
+                f"{'✅' if exec_res.get('status') == 'DONE' else '❌'} **ผลรัน Cloud Runner (`{job_id}`): `{exec_res.get('status')}`**",
+                f"- **Handler:** `{exec_res.get('handler', 'AUTO')}` | **Lane:** `{exec_res.get('executionLane', 'CLOUD_ONLY')}` | **Paper:** `0` (`NO_AUTO_PRINT`)",
+                f"- **สรุป:** {exec_res.get('summary', '')}",
+                f"- **แนะนำ:** {exec_res.get('advisor', '')}",
+                f"- **Return Callback:** `{cb_status}`",
+            ]
+            if run_url:
+                comment_lines.append(f"- **Run & Artifact:** {run_url}")
+            issue_done_comment = post_github_issue_comment(
+                issue_number,
+                "\n".join(comment_lines),
+                gh_token=gh_token,
+                repo=gh_repo,
+            )
+
+        results.append(
+            {
+                "jobId": job_id,
+                "receiverAck": claim_info,
+                "execution": exec_res,
+                "callback": cb_bundle.get("callback"),
+                "issueComment": issue_done_comment,
+            }
+        )
         report = {
             "runner": RUNNER_WORKER_ID,
-            "mode": "DIRECT_PROMPT",
+            "mode": mode,
             "startedAtIso": started_iso,
+            "runUrl": run_url,
             "no_auto_print": NO_AUTO_PRINT,
             "paper_printed": PAPER_PRINTED,
             "processed": len(results),
             "results": results,
         }
         _write_report(report)
+        write_github_step_summary(report)
         return report
 
     if skip_gateway:
@@ -557,15 +907,17 @@ def run_cloud_cycle(
             "runner": RUNNER_WORKER_ID,
             "mode": "OFFLINE_AUDIT",
             "startedAtIso": started_iso,
+            "runUrl": run_url,
             "no_auto_print": NO_AUTO_PRINT,
             "paper_printed": PAPER_PRINTED,
             "processed": len(results),
             "results": results,
         }
         _write_report(report)
+        write_github_step_summary(report)
         return report
 
-    heartbeat_ack = emit_cloud_heartbeat(gateway_url, token) if not dry_run else {"skipped": True}
+    heartbeat_ack = emit_cloud_heartbeat(gateway_url, token) if (token and not dry_run) else {"skipped": True}
 
     jobs_to_process: List[Dict[str, Any]] = []
     if event_payload and isinstance(event_payload, dict):
@@ -600,21 +952,17 @@ def run_cloud_cycle(
             results.append({"jobId": job_id, "taskId": task_id, "dryRun": True, "execution": exec_res})
             continue
 
-        claim_ack = gas_post(
-            gateway_url,
-            {"action": "CLAIM_JOB", "jobId": job_id, "workerId": RUNNER_WORKER_ID},
-            token=token,
-        )
-        if not claim_ack.get("claimed"):
-            # Fallback if direct dispatch job was not yet queued in pendingJobs
-            if event_payload and job is event_payload and "not found" in str(claim_ack.get("error", "")).lower():
-                pass
+        claim_info = claim_job_with_ack(gateway_url, job_id, token=token)
+        if not claim_info.get("ackVerified"):
+            if event_payload and job is event_payload and "not found" in str(claim_info.get("error", "")).lower():
+                claim_info["directPayloadBypass"] = True
             else:
                 results.append(
                     {
                         "jobId": job_id,
                         "status": "NOT_CLAIMED",
-                        "reason": claim_ack.get("error", "already claimed"),
+                        "receiverAck": claim_info,
+                        "reason": claim_info.get("error", "claim ACK failed"),
                     }
                 )
                 continue
@@ -629,45 +977,27 @@ def run_cloud_cycle(
                 "advisor": "ตรวจสอบรายละเอียดข้อผิดพลาดใน GitHub Actions Run Log",
             }
 
-        final_status = "DONE" if exec_res.get("status") == "DONE" else "FAILED"
-        complete_summary = scrub_pii_text(
-            f"{exec_res.get('summary', '')} | แนะนำ: {exec_res.get('advisor', '')}"
-        )[:300]
-
-        complete_ack = gas_post(
-            gateway_url,
-            {
-                "action": "COMPLETE_JOB",
-                "jobId": job_id,
-                "status": final_status,
-                "summary": complete_summary,
-                "advisorNote": scrub_pii_text(str(exec_res.get("advisor", "")))[:300],
-                "executionLane": "CLOUD_ONLY",
-                "paperPrinted": 0,
-            },
+        cb_bundle = dispatch_return_callback(
+            gateway_url=gateway_url,
             token=token,
-        )
-        gas_post(
-            gateway_url,
-            {
-                "action": "LOG_UPDATE",
-                "actor": RUNNER_WORKER_ID,
-                "task": task_id,
-                "status": final_status,
-                "details": {
-                    "jobId": job_id,
-                    "handler": exec_res.get("handler"),
-                    "paperPrinted": 0,
-                },
-            },
-            token=token,
+            job=job,
+            exec_res=exec_res,
+            claim_info=claim_info,
+            callback_prompt=callback_prompt,
+            run_url=run_url,
         )
         results.append(
             {
                 "jobId": job_id,
                 "taskId": task_id,
+                "receiverAck": {
+                    "claimed": claim_info.get("claimed"),
+                    "ackVerified": claim_info.get("ackVerified"),
+                    "method": claim_info.get("method"),
+                },
                 "execution": exec_res,
-                "completeAck": complete_ack.get("success", False),
+                "completeAck": cb_bundle.get("completeAck", False),
+                "callback": cb_bundle.get("callback"),
             }
         )
 
@@ -675,6 +1005,7 @@ def run_cloud_cycle(
         "runner": RUNNER_WORKER_ID,
         "mode": "GATEWAY_CYCLE",
         "startedAtIso": started_iso,
+        "runUrl": run_url,
         "no_auto_print": NO_AUTO_PRINT,
         "paper_printed": PAPER_PRINTED,
         "heartbeat_ok": bool(heartbeat_ack.get("success")),
@@ -683,16 +1014,21 @@ def run_cloud_cycle(
         "results": results,
     }
     _write_report(report)
+    write_github_step_summary(report)
     return report
 
 
-def _write_report(report: Dict[str, Any]) -> None:
+def _write_json_file(path: Path, data: Dict[str, Any]) -> None:
     try:
-        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-        with REPORT_FILE.open("w", encoding="utf-8") as fh:
-            json.dump(report, fh, ensure_ascii=False, indent=2)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=2)
     except Exception:
         pass
+
+
+def _write_report(report: Dict[str, Any]) -> None:
+    _write_json_file(REPORT_FILE, report)
 
 
 # ---------------------------------------------------------------------------
@@ -755,16 +1091,25 @@ def run_self_test() -> Dict[str, Any]:
     assert _sha256_file(root_code) == _sha256_file(scripts_code), "Code.gs parity mismatch"
     checks += 1
 
-    # 6. Full Mock GAS Gateway E2E cycle (CLOUD_ONLY runs, CMS2_LOCAL stays untouched)
+    # 6. Full Mock GAS Gateway E2E cycle (ACK verify + Google Tracker + Return Callback + CMS2_LOCAL guard)
     mock_state: Dict[str, Any] = {
         "pendingJobs": [
             {
                 "jobId": "CLOUD-E2E-001",
                 "taskId": "CRD-CLOUD-TEST-01",
                 "title": "ตรวจระบบและ parity บนคลาวด์",
-                "promptText": "ตรวจระบบ parity SHA-256 และสถานะ workflow",
+                "promptText": "ตรวจระบบ parity SHA-256 และสถานะ workflow\nCALLBACK: ตรวจระบบ parity SHA-256",
                 "executionLane": "CLOUD_ONLY",
                 "status": "PENDING",
+            },
+            {
+                "jobId": "CLOUD-LOCKED-003",
+                "taskId": "CRD-CLOUD-LOCKED-03",
+                "title": "งานที่มีคนรับไปแล้ว",
+                "promptText": "ตรวจระบบ",
+                "executionLane": "CLOUD_ONLY",
+                "status": "IN_PROGRESS",
+                "claimedBy": "OTHER-RUNNER",
             },
             {
                 "jobId": "CMS2-E2E-002",
@@ -778,6 +1123,7 @@ def run_self_test() -> Dict[str, Any]:
         "completedJobs": [],
         "heartbeats": [],
         "logs": [],
+        "callbacks": [],
     }
     expected_token = "MOCK-SECRET-TOKEN"
 
@@ -824,8 +1170,8 @@ def run_self_test() -> Dict[str, Any]:
                     if j["jobId"] == jid and j["status"] == "PENDING":
                         j["status"] = "IN_PROGRESS"
                         j["claimedBy"] = body.get("workerId")
-                        return self._json(200, {"success": True, "claimed": True, "job": j})
-                return self._json(200, {"success": False, "claimed": False, "error": "Not found"})
+                        return self._json(200, {"success": True, "claimed": True, "ackVerified": True, "job": j})
+                return self._json(200, {"success": False, "claimed": False, "error": "Not PENDING or not found"})
             if action == "COMPLETE_JOB":
                 jid = body.get("jobId")
                 for idx, j in enumerate(mock_state["pendingJobs"]):
@@ -834,9 +1180,16 @@ def run_self_test() -> Dict[str, Any]:
                         done_job["status"] = body.get("status", "DONE")
                         done_job["summary"] = body.get("summary", "")
                         done_job["advisorNote"] = body.get("advisorNote", "")
+                        done_job["claimAckVerified"] = body.get("claimAckVerified", False)
+                        done_job["trackerUpdate"] = body.get("trackerUpdate", {})
                         mock_state["pendingJobs"].pop(idx)
                         mock_state["completedJobs"].append(done_job)
-                        return self._json(200, {"success": True, "job": done_job})
+                        cb_prompt = body.get("callbackPrompt", "")
+                        cb_dispatch = {"triggered": False, "status": "NONE"}
+                        if cb_prompt:
+                            cb_dispatch = {"triggered": True, "status": "DISPATCHED", "prompt": cb_prompt}
+                            mock_state["callbacks"].append(cb_dispatch)
+                        return self._json(200, {"success": True, "job": done_job, "callbackDispatch": cb_dispatch})
                 return self._json(200, {"success": False, "error": "Missing job"})
             if action == "LOG_UPDATE":
                 mock_state["logs"].append(body)
@@ -848,17 +1201,34 @@ def run_self_test() -> Dict[str, Any]:
     thr = threading.Thread(target=srv.serve_forever, daemon=True)
     thr.start()
     try:
-        report = run_cloud_cycle(f"http://127.0.0.1:{port}/exec", token=expected_token)
+        gw = f"http://127.0.0.1:{port}/exec"
+        report = run_cloud_cycle(gw, token=expected_token)
         assert report["heartbeat_ok"] is True
         assert report["pending_fetch_ok"] is True
         assert report["paper_printed"] == 0
         assert len(mock_state["completedJobs"]) == 1
         assert mock_state["completedJobs"][0]["jobId"] == "CLOUD-E2E-001"
         assert mock_state["completedJobs"][0]["status"] == "DONE"
-        # Ensure CMS2_LOCAL job remained untouched in pendingJobs!
-        assert len(mock_state["pendingJobs"]) == 1
-        assert mock_state["pendingJobs"][0]["jobId"] == "CMS2-E2E-002"
-        checks += 2
+        assert mock_state["completedJobs"][0]["claimAckVerified"] is True
+        assert mock_state["completedJobs"][0]["trackerUpdate"]["sheetStatus"] == "เสร็จแล้ว"
+        assert len(mock_state["callbacks"]) == 1
+        assert report["results"][0]["callback"]["status"] == "DISPATCHED_VIA_GAS"
+        # Ensure locked job was rejected safely & CMS2_LOCAL job remained untouched!
+        rejected = claim_job_with_ack(gw, "CLOUD-LOCKED-003", token=expected_token)
+        assert rejected["claimed"] is False and rejected["ackVerified"] is False
+        assert len(mock_state["pendingJobs"]) == 2
+        assert any(j["jobId"] == "CMS2-E2E-002" for j in mock_state["pendingJobs"])
+        # Loop guard test when callbackDepth == MAX_CALLBACK_DEPTH
+        guarded = dispatch_return_callback(
+            gateway_url="",
+            token="",
+            job={"jobId": "LOOP-1", "promptText": "ตรวจระบบ", "callbackDepth": MAX_CALLBACK_DEPTH},
+            exec_res={"status": "DONE", "summary": "ok", "advisor": "ok"},
+            claim_info={"ackVerified": True},
+            callback_prompt="ตรวจระบบ",
+        )
+        assert guarded["callback"]["status"] == "LOOP_GUARD_BLOCKED"
+        checks += 4
     finally:
         srv.shutdown()
         srv.server_close()
@@ -880,6 +1250,26 @@ def main() -> int:
         help="Google Apps Script /exec endpoint URL",
     )
     parser.add_argument("--prompt", default="", help="Run a single natural-language command directly")
+    parser.add_argument(
+        "--callback-prompt",
+        default=os.environ.get("CRD_INPUT_CALLBACK_PROMPT", "").strip(),
+        help="Optional return script command executed after primary job DONE",
+    )
+    parser.add_argument(
+        "--issue-number",
+        default=os.environ.get("CRD_ISSUE_NUMBER", "").strip(),
+        help="GitHub Issue number for automatic ACK and result comments",
+    )
+    parser.add_argument(
+        "--issue-title",
+        default=os.environ.get("CRD_ISSUE_TITLE", "").strip(),
+        help="GitHub Issue title",
+    )
+    parser.add_argument(
+        "--issue-body",
+        default=os.environ.get("CRD_ISSUE_BODY", "").strip(),
+        help="GitHub Issue body",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Run without modifying GAS queue state")
     parser.add_argument("--offline-audit", action="store_true", help="Run local repository audit without GAS network call")
     parser.add_argument("--self-test", action="store_true", help="Run offline unit & mock E2E self-tests")
@@ -904,6 +1294,10 @@ def main() -> int:
         token=token,
         event_payload=event_payload,
         direct_prompt=args.prompt,
+        callback_prompt=args.callback_prompt,
+        issue_number=args.issue_number,
+        issue_title=args.issue_title,
+        issue_body=args.issue_body,
         dry_run=args.dry_run,
         skip_gateway=args.offline_audit,
     )

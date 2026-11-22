@@ -6,9 +6,14 @@
 const FOLDER_ID = '1RvGehvlDrPTaR9JvQgCcFPqiQbRE8_yn';
 const MANIFEST_FILENAME = '00_Project_Manifest.json';
 const DOC_B_ID = '1UL_maGIJiMm8N6f0sUIYwAkFsqpHLz4HrZbkQZTZn7Q';
+const TRACKER_SHEET_ID = '15Pcrq0d4O5I4OZKRS64PcRiVtAHYTZ0JFATdFsCNx88';
+const CHECKPOINT_SHEET_ID = '1SiUzkHZcKNfukRSnGBpeMZou1exbrSivlOo20T4pM40';
+const TRACKER_TAB_STATUS = 'กระดานติดตามงาน';
+const CHECKPOINT_TAB_CMD = '07 คำสั่งงาน';
 const ONLINE_WINDOW_MS = 3 * 60 * 1000; // 3 minutes
 const MAX_PENDING_JOBS = 50;
 const MAX_COMPLETED_JOBS = 50;
+const MAX_CALLBACK_DEPTH = 2;
 const DEFAULT_GH_REPO = 'm3c07n05-code/Work-space-aap';
 
 function doGet(e) {
@@ -42,6 +47,11 @@ function doGet(e) {
       });
     }
 
+    if (action === 'GET_RECEIVER_STATUS') {
+      const manifest = loadOrCreateManifest_();
+      return jsonResponse_(buildReceiverStatusResponse_(manifest, params.jobId));
+    }
+
     if (action === 'GET_PENDING_JOBS') {
       const manifest = loadOrCreateManifest_();
       const pendingJobs = getPendingJobsList_(manifest, params.lane, params.workerId);
@@ -67,6 +77,7 @@ function doGet(e) {
           return jsonResponse_({
             success: false,
             claimed: false,
+            ackVerified: false,
             action: 'CLAIM_JOB',
             error: 'Job not found in pendingJobs: ' + targetJobId,
             timestamp: nowIso
@@ -76,6 +87,7 @@ function doGet(e) {
           return jsonResponse_({
             success: false,
             claimed: false,
+            ackVerified: false,
             action: 'CLAIM_JOB',
             job: job,
             error: 'Job already in status ' + job.status,
@@ -85,11 +97,14 @@ function doGet(e) {
         job.status = 'IN_PROGRESS';
         job.claimedBy = workerId;
         job.claimedAtIso = nowIso;
+        job.ackVerified = true;
         manifest.lastUpdated = nowIso;
         saveManifest_(manifest);
+        syncJobToGoogleTrackers_('CLAIM', job, params);
         return jsonResponse_({
           success: true,
           claimed: true,
+          ackVerified: true,
           action: 'CLAIM_JOB',
           job: job,
           timestamp: nowIso
@@ -145,6 +160,11 @@ function doPost(e) {
         serverTimeIso: nowIso,
         timestamp: nowIso
       });
+    }
+
+    if (action === 'GET_RECEIVER_STATUS') {
+      const manifest = loadOrCreateManifest_(payload.workspaceId, payload.targetManifest);
+      return jsonResponse_(buildReceiverStatusResponse_(manifest, payload.jobId));
     }
 
     // Fail-closed token check for LOG_UPDATE
@@ -382,10 +402,12 @@ function doPost(e) {
         });
       }
 
-      // 8. Persistent Job Queue (Doc-B-to-GAS Auto-Queue Bridge + Cloud Auto-Router)
+      // 8. Persistent Job Queue (Doc-B-to-GAS Auto-Queue Bridge + Google Tracker + Cloud Auto-Router)
       if (action === 'SUBMIT_JOB') {
         const promptText = String(payload.promptText || payload.description || payload.title || '');
         const routedLane = classifyExecutionLane_(promptText, payload.executionLane || payload.lane);
+        const rawDepth = Number(payload.callbackDepth || 0);
+        const cbDepth = isNaN(rawDepth) || rawDepth < 0 ? 0 : Math.min(rawDepth, MAX_CALLBACK_DEPTH);
         const enqueued = enqueueJob_(manifest, {
           jobId: payload.jobId,
           type: payload.type || payload.taskType || (routedLane === 'CLOUD_ONLY' ? 'CLOUD_DISPATCH' : 'DOC_B_DISPATCH'),
@@ -395,10 +417,13 @@ function doPost(e) {
           docId: payload.docId || DOC_B_ID,
           contentHash: payload.contentHash || '',
           promptText: promptText,
-          executionLane: routedLane
+          executionLane: routedLane,
+          callbackPrompt: String(payload.callbackPrompt || '').slice(0, 500),
+          callbackDepth: cbDepth
         }, nowIso);
         if (enqueued.inserted) {
           saveManifest_(manifest, payload.workspaceId, payload.targetManifest);
+          syncJobToGoogleTrackers_('SUBMIT', enqueued.job, payload);
         }
         let dispatchResult = { triggered: false, status: 'SKIPPED_CMS2_LOCAL' };
         if (enqueued.job.executionLane === 'CLOUD_ONLY') {
@@ -425,6 +450,7 @@ function doPost(e) {
           return jsonResponse_({
             success: false,
             claimed: false,
+            ackVerified: false,
             action: 'CLAIM_JOB',
             error: 'Job not found in pendingJobs: ' + targetJobId,
             timestamp: nowIso
@@ -434,6 +460,7 @@ function doPost(e) {
           return jsonResponse_({
             success: false,
             claimed: false,
+            ackVerified: false,
             action: 'CLAIM_JOB',
             job: job,
             error: 'Job already in status ' + job.status,
@@ -443,11 +470,14 @@ function doPost(e) {
         job.status = 'IN_PROGRESS';
         job.claimedBy = workerId;
         job.claimedAtIso = nowIso;
+        job.ackVerified = true;
         manifest.lastUpdated = nowIso;
         saveManifest_(manifest, payload.workspaceId, payload.targetManifest);
+        syncJobToGoogleTrackers_('CLAIM', job, payload);
         return jsonResponse_({
           success: true,
           claimed: true,
+          ackVerified: true,
           action: 'CLAIM_JOB',
           job: job,
           timestamp: nowIso
@@ -459,13 +489,19 @@ function doPost(e) {
         const finalStatus = String(payload.status || 'DONE').toUpperCase();
         const summary = String(payload.summary || '').slice(0, 300);
         const advisorNote = String(payload.advisorNote || '').slice(0, 300);
+        const cbPrompt = String(payload.callbackPrompt || '').trim().slice(0, 500);
         const idx = manifest.pendingJobs.findIndex(function(j) { return j && j.jobId === targetJobId; });
         if (idx >= 0) {
-          const finishedJob = Object.assign({}, manifest.pendingJobs[idx], {
+          const origJob = manifest.pendingJobs[idx];
+          const curDepth = Number(payload.callbackDepth !== undefined ? payload.callbackDepth : (origJob.callbackDepth || 0)) || 0;
+          const finishedJob = Object.assign({}, origJob, {
             status: finalStatus,
             completedAtIso: nowIso,
             summary: summary,
             advisorNote: advisorNote,
+            runUrl: String(payload.runUrl || ''),
+            outputPdf: String(payload.outputPdf || ''),
+            claimAckVerified: Boolean(payload.claimAckVerified !== undefined ? payload.claimAckVerified : origJob.ackVerified),
             paperPrinted: Number(payload.paperPrinted || 0)
           });
           manifest.pendingJobs.splice(idx, 1);
@@ -473,13 +509,39 @@ function doPost(e) {
           if (manifest.completedJobs.length > MAX_COMPLETED_JOBS) {
             manifest.completedJobs = manifest.completedJobs.slice(0, MAX_COMPLETED_JOBS);
           }
+
+          let callbackDispatch = { triggered: false, status: 'NONE' };
+          const activeCbPrompt = cbPrompt || String(origJob.callbackPrompt || '').trim();
+          if (activeCbPrompt && finalStatus === 'DONE' && curDepth < MAX_CALLBACK_DEPTH) {
+            const nextDepth = curDepth + 1;
+            const cbLane = classifyExecutionLane_(activeCbPrompt, '');
+            const cbEnqueued = enqueueJob_(manifest, {
+              jobId: targetJobId + '-CB' + nextDepth,
+              type: cbLane === 'CLOUD_ONLY' ? 'CLOUD_CALLBACK' : 'DOC_B_DISPATCH',
+              taskId: String(origJob.taskId || targetJobId) + '-CB' + nextDepth,
+              title: '[Callback #' + nextDepth + '] ' + activeCbPrompt.slice(0, 90),
+              source: 'RETURN_CALLBACK',
+              docId: DOC_B_ID,
+              promptText: activeCbPrompt,
+              executionLane: cbLane,
+              callbackDepth: nextDepth
+            }, nowIso);
+            if (cbEnqueued.inserted && cbEnqueued.job.executionLane === 'CLOUD_ONLY') {
+              callbackDispatch = triggerGitHubCloudRunner_(cbEnqueued.job);
+              callbackDispatch.callbackJobId = cbEnqueued.job.jobId;
+              callbackDispatch.callbackDepth = nextDepth;
+            }
+          }
+
           manifest.lastUpdated = nowIso;
           saveManifest_(manifest, payload.workspaceId, payload.targetManifest);
+          syncJobToGoogleTrackers_('COMPLETE', finishedJob, payload);
           return jsonResponse_({
             success: true,
             action: 'COMPLETE_JOB',
             jobId: targetJobId,
             status: finalStatus,
+            callbackDispatch: callbackDispatch,
             job: finishedJob,
             timestamp: nowIso
           });
@@ -490,6 +552,19 @@ function doPost(e) {
           jobId: targetJobId,
           status: finalStatus,
           alreadyCompleted: true,
+          timestamp: nowIso
+        });
+      }
+
+      if (action === 'SYNC_TRACKER') {
+        const trackerResult = syncTrackerSheetToQueue_(manifest, nowIso);
+        if (trackerResult.queuedCount > 0) {
+          saveManifest_(manifest, payload.workspaceId, payload.targetManifest);
+        }
+        return jsonResponse_({
+          success: true,
+          action: 'SYNC_TRACKER',
+          trackerResult: trackerResult,
           timestamp: nowIso
         });
       }
@@ -524,72 +599,67 @@ function doPost(e) {
 
 /**
  * Time-Driven Trigger Entry Point (Every 1 Minute)
- * Reads ONLY the top block of Doc B (before first horizontal rule) and queues new ACTIVE dispatches into PENDING_JOBS.
+ * Reads ONLY the top block of Doc B (before first horizontal rule) and optional READY rows in Sheet 07.
  */
 function pollDocBToQueue() {
   const nowIso = new Date().toISOString();
   const topBlock = readDocBTopBlock_(DOC_B_ID);
-  if (!topBlock.text) {
-    return { success: true, queued: false, reason: 'EMPTY_TOP_BLOCK', polledAtIso: nowIso };
-  }
-
-  const active = isDocBTopBlockActive_(topBlock.text);
-  const contentHash = computeSha256Hex_(topBlock.text);
+  const active = topBlock.text ? isDocBTopBlockActive_(topBlock.text) : false;
+  const contentHash = topBlock.text ? computeSha256Hex_(topBlock.text) : '';
 
   return withScriptLock_(function() {
     const manifest = loadOrCreateManifest_();
     manifest.docBState = manifest.docBState || {};
     manifest.docBState.lastPolledIso = nowIso;
-    manifest.docBState.lastTopHash = contentHash;
-    manifest.docBState.lastTopHeading = topBlock.heading;
-    manifest.docBState.lastTopActive = active;
+    if (topBlock.text) {
+      manifest.docBState.lastTopHash = contentHash;
+      manifest.docBState.lastTopHeading = topBlock.heading;
+      manifest.docBState.lastTopActive = active;
+    }
 
-    if (!active) {
-      saveManifest_(manifest);
-      return {
-        success: true,
-        queued: false,
-        reason: 'TOP_BLOCK_NOT_ACTIVE',
-        heading: topBlock.heading,
+    let docBResult = { queued: false, reason: topBlock.text ? 'TOP_BLOCK_NOT_ACTIVE' : 'EMPTY_TOP_BLOCK' };
+    if (topBlock.text && active) {
+      const taskIdMatch = topBlock.text.match(/TASK_ID\s*:\s*([A-Za-z0-9_\-]+)/i);
+      const taskId = taskIdMatch ? taskIdMatch[1] : ('DOCB-' + contentHash.slice(0, 8));
+      const routedLane = classifyExecutionLane_(topBlock.text);
+
+      const enqueued = enqueueJob_(manifest, {
+        type: routedLane === 'CLOUD_ONLY' ? 'CLOUD_DISPATCH' : 'DOC_B_DISPATCH',
+        taskId: taskId,
+        title: topBlock.heading || 'Doc B Active Task',
+        source: 'DOC_B_POLL_1MIN',
+        docId: DOC_B_ID,
         contentHash: contentHash,
-        polledAtIso: nowIso
+        promptText: topBlock.text.slice(0, 4000),
+        executionLane: routedLane
+      }, nowIso);
+
+      let cloudDispatch = { triggered: false, status: 'SKIPPED' };
+      if (enqueued.inserted) {
+        manifest.docBState.lastQueuedHash = contentHash;
+        manifest.docBState.lastQueuedJobId = enqueued.job.jobId;
+        manifest.docBState.lastQueuedIso = nowIso;
+        if (enqueued.job.executionLane === 'CLOUD_ONLY') {
+          cloudDispatch = triggerGitHubCloudRunner_(enqueued.job);
+        }
+      }
+      docBResult = {
+        queued: enqueued.inserted,
+        deduplicated: !enqueued.inserted,
+        jobId: enqueued.job.jobId,
+        taskId: taskId,
+        executionLane: enqueued.job.executionLane,
+        cloudDispatch: cloudDispatch
       };
     }
 
-    const taskIdMatch = topBlock.text.match(/TASK_ID\s*:\s*([A-Za-z0-9_\-]+)/i);
-    const taskId = taskIdMatch ? taskIdMatch[1] : ('DOCB-' + contentHash.slice(0, 8));
-    const routedLane = classifyExecutionLane_(topBlock.text);
-
-    const enqueued = enqueueJob_(manifest, {
-      type: routedLane === 'CLOUD_ONLY' ? 'CLOUD_DISPATCH' : 'DOC_B_DISPATCH',
-      taskId: taskId,
-      title: topBlock.heading || 'Doc B Active Task',
-      source: 'DOC_B_POLL_1MIN',
-      docId: DOC_B_ID,
-      contentHash: contentHash,
-      promptText: topBlock.text.slice(0, 4000),
-      executionLane: routedLane
-    }, nowIso);
-
-    let cloudDispatch = { triggered: false, status: 'SKIPPED' };
-    if (enqueued.inserted) {
-      manifest.docBState.lastQueuedHash = contentHash;
-      manifest.docBState.lastQueuedJobId = enqueued.job.jobId;
-      manifest.docBState.lastQueuedIso = nowIso;
-      if (enqueued.job.executionLane === 'CLOUD_ONLY') {
-        cloudDispatch = triggerGitHubCloudRunner_(enqueued.job);
-      }
-    }
-
+    const trackerResult = syncTrackerSheetToQueue_(manifest, nowIso);
     saveManifest_(manifest);
     return {
       success: true,
-      queued: enqueued.inserted,
-      deduplicated: !enqueued.inserted,
-      jobId: enqueued.job.jobId,
-      taskId: taskId,
-      executionLane: enqueued.job.executionLane,
-      cloudDispatch: cloudDispatch,
+      queued: Boolean(docBResult.queued || trackerResult.queuedCount > 0),
+      docB: docBResult,
+      tracker: trackerResult,
       contentHash: contentHash,
       polledAtIso: nowIso
     };
@@ -703,6 +773,151 @@ function classifyExecutionLane_(promptText, explicitLane) {
   return 'CLOUD_ONLY';
 }
 
+function buildReceiverStatusResponse_(manifest, targetJobId) {
+  ensureManifestFields_(manifest);
+  const id = String(targetJobId || '').trim();
+  const matched = id
+    ? (manifest.pendingJobs.find(function(j) { return j && j.jobId === id; }) ||
+       manifest.completedJobs.find(function(j) { return j && j.jobId === id; }) || null)
+    : null;
+  const receiverStatus = matched ? String(matched.status || 'UNKNOWN') : 'IDLE';
+  const ackVerified = Boolean(matched && (matched.ackVerified || matched.claimAckVerified || matched.claimedBy));
+  return {
+    success: true,
+    action: 'GET_RECEIVER_STATUS',
+    jobId: id || null,
+    receiverStatus: receiverStatus,
+    claimAckVerified: ackVerified,
+    job: matched,
+    pendingCount: manifest.pendingJobs.length,
+    completedCount: manifest.completedJobs.length,
+    syncSummary: computeSyncSummary_(manifest.devices || {}),
+    serverTimeIso: new Date().toISOString()
+  };
+}
+
+function syncJobToGoogleTrackers_(stage, job, payload) {
+  if (!job) return { synced: false, reason: 'NO_JOB' };
+  const updated = [];
+  const taskId = String(job.taskId || job.jobId || '').trim();
+  const statusMap = {
+    SUBMIT: 'งานใหม่',
+    CLAIM: 'กำลังทำ',
+    COMPLETE: String(job.status || 'DONE').toUpperCase() === 'DONE' ? 'เสร็จแล้ว' : 'ติดขัด'
+  };
+  const targetSheetStatus = statusMap[stage] || 'กำลังทำ';
+  const evidenceUrl = String((payload && (payload.runUrl || (payload.trackerUpdate && payload.trackerUpdate.evidenceUrl))) || job.runUrl || '');
+  const nowStr = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd HH:mm:ss');
+
+  try {
+    const ssCheck = SpreadsheetApp.openById(CHECKPOINT_SHEET_ID);
+    const cmdSheet = ssCheck.getSheetByName(CHECKPOINT_TAB_CMD);
+    if (cmdSheet && taskId) {
+      const lastRow = cmdSheet.getLastRow();
+      const rows = lastRow >= 2 ? cmdSheet.getRange(2, 1, lastRow - 1, 11).getValues() : [];
+      let foundRow = -1;
+      for (let i = 0; i < rows.length; i++) {
+        if (String(rows[i][0] || '').trim() === taskId || String(rows[i][0] || '').trim() === String(job.jobId || '')) {
+          foundRow = i + 2;
+          break;
+        }
+      }
+      if (foundRow > 0) {
+        cmdSheet.getRange(foundRow, 5).setValue(targetSheetStatus);
+        if (evidenceUrl) cmdSheet.getRange(foundRow, 8).setValue(evidenceUrl);
+        cmdSheet.getRange(foundRow, 11).setValue(nowStr);
+      } else if (stage === 'SUBMIT' && String(job.source || '') !== 'TRACKER_SHEET_07') {
+        cmdSheet.appendRow([
+          taskId,
+          'CRD-W04',
+          String(job.title || '').slice(0, 120),
+          String(job.promptText || '').slice(0, 500),
+          targetSheetStatus,
+          '',
+          '',
+          evidenceUrl,
+          String(job.source || 'CLOUD_RUNNER'),
+          nowStr,
+          nowStr
+        ]);
+      }
+      updated.push('CHECKPOINT_07');
+    }
+  } catch (_) {}
+
+  try {
+    const ssTrack = SpreadsheetApp.openById(TRACKER_SHEET_ID);
+    const statusSheet = ssTrack.getSheetByName(TRACKER_TAB_STATUS);
+    if (statusSheet && taskId) {
+      const lastRow = statusSheet.getLastRow();
+      const rows = lastRow >= 2 ? statusSheet.getRange(2, 1, lastRow - 1, 9).getValues() : [];
+      for (let r = 0; r < rows.length; r++) {
+        if (String(rows[r][0] || '').trim() === taskId) {
+          const rowIdx = r + 2;
+          statusSheet.getRange(rowIdx, 4).setValue(targetSheetStatus);
+          if (job.summary) statusSheet.getRange(rowIdx, 5).setValue(String(job.summary).slice(0, 240));
+          if (job.advisorNote) statusSheet.getRange(rowIdx, 7).setValue(String(job.advisorNote).slice(0, 200));
+          statusSheet.getRange(rowIdx, 8).setValue(nowStr);
+          if (evidenceUrl) statusSheet.getRange(rowIdx, 9).setValue(evidenceUrl);
+          updated.push('TRACKER_STATUS');
+          break;
+        }
+      }
+    }
+  } catch (_) {}
+
+  return { synced: updated.length > 0, targets: updated };
+}
+
+function syncTrackerSheetToQueue_(manifest, nowIso) {
+  const result = { scanned: 0, queuedCount: 0, jobs: [], error: '' };
+  try {
+    const ssCheck = SpreadsheetApp.openById(CHECKPOINT_SHEET_ID);
+    const cmdSheet = ssCheck.getSheetByName(CHECKPOINT_TAB_CMD);
+    if (!cmdSheet) return result;
+    const lastRow = cmdSheet.getLastRow();
+    if (lastRow < 2) return result;
+    const rows = cmdSheet.getRange(2, 1, lastRow - 1, 11).getValues();
+    result.scanned = rows.length;
+    const nowStr = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd HH:mm:ss');
+
+    for (let i = 0; i < rows.length; i++) {
+      const taskId = String(rows[i][0] || '').trim();
+      const title = String(rows[i][2] || '').trim();
+      const detail = String(rows[i][3] || '').trim();
+      const rowStatus = String(rows[i][4] || '').trim();
+      if (!taskId || /^(READY|EXECUTE NOW|พร้อมรัน|สั่งรันคลาวด์)$/i.test(rowStatus) === false) {
+        continue;
+      }
+      const combinedPrompt = [title, detail].filter(Boolean).join('\n');
+      const contentHash = computeSha256Hex_(taskId + '|' + combinedPrompt);
+      const routedLane = classifyExecutionLane_(combinedPrompt, '');
+      const enqueued = enqueueJob_(manifest, {
+        type: routedLane === 'CLOUD_ONLY' ? 'CLOUD_DISPATCH' : 'DOC_B_DISPATCH',
+        taskId: taskId,
+        title: title || taskId,
+        source: 'TRACKER_SHEET_07',
+        contentHash: contentHash,
+        promptText: combinedPrompt,
+        executionLane: routedLane
+      }, nowIso);
+      if (enqueued.inserted) {
+        cmdSheet.getRange(i + 2, 5).setValue('รับเข้าคิวแล้ว');
+        cmdSheet.getRange(i + 2, 11).setValue(nowStr);
+        let dispatchRes = { triggered: false };
+        if (enqueued.job.executionLane === 'CLOUD_ONLY') {
+          dispatchRes = triggerGitHubCloudRunner_(enqueued.job);
+        }
+        result.queuedCount++;
+        result.jobs.push({ jobId: enqueued.job.jobId, taskId: taskId, cloudDispatch: dispatchRes });
+      }
+    }
+  } catch (err) {
+    result.error = String(err);
+  }
+  return result;
+}
+
 function triggerGitHubCloudRunner_(job) {
   const props = PropertiesService.getScriptProperties();
   const ghPat = String(props.getProperty('GH_PAT') || '').trim();
@@ -711,14 +926,17 @@ function triggerGitHubCloudRunner_(job) {
   }
   const repo = String(props.getProperty('GH_REPO') || DEFAULT_GH_REPO).trim();
   const url = 'https://api.github.com/repos/' + repo + '/dispatches';
+  const cbDepth = Number(job.callbackDepth || 0) || 0;
   const payload = {
-    event_type: 'crd-cloud-job',
+    event_type: cbDepth > 0 ? 'crd-cloud-callback' : 'crd-cloud-job',
     client_payload: {
       jobId: String(job.jobId || ''),
       taskId: String(job.taskId || ''),
       title: String(job.title || '').slice(0, 180),
       executionLane: String(job.executionLane || 'CLOUD_ONLY'),
-      promptText: String(job.promptText || '').slice(0, 3500)
+      promptText: String(job.promptText || '').slice(0, 3500),
+      callbackPrompt: String(job.callbackPrompt || '').slice(0, 500),
+      callbackDepth: cbDepth
     }
   };
   try {
@@ -777,6 +995,8 @@ function enqueueJob_(manifest, spec, nowIso) {
     docId: String(spec.docId || DOC_B_ID),
     contentHash: contentHash,
     promptText: promptStr,
+    callbackPrompt: String(spec.callbackPrompt || '').slice(0, 500),
+    callbackDepth: Number(spec.callbackDepth || 0) || 0,
     createdAtIso: nowIso
   };
 
@@ -986,6 +1206,7 @@ function renderMobileDispatcherHtml_(endpointUrl) {
     '<input id="tok" type="password" placeholder="ใส่ Token ของ Gateway..." onchange="saveTok()"></div>',
     '<div class="card"><div style="font-size:13px;font-weight:700;margin-bottom:6px">พิมพ์คำสั่งที่ต้องการให้ทำได้เลย</div>',
     '<textarea id="cmd" rows="3" placeholder="เช่น สร้างใบนำส่ง WORK 4 ขนาด A4 ด้วยข้อมูลสมมติ 3 รายการ หรือ ตรวจระยะพิมพ์ A6"></textarea>',
+    '<input id="cbCmd" type="text" style="margin-top:6px;font-size:12px" placeholder="(ตัวเลือก) คำสั่งรันกลับหลังจบงาน เช่น ตรวจระบบ parity SHA-256">',
     '<div><button class="btn-chip" onclick="quick(\'สร้างใบนำส่ง WORK 4 ขนาด A4 ด้วยข้อมูลสมมติ 3 รายการ\')">📄 ใบนำส่ง A4</button>',
     '<button class="btn-chip" onclick="quick(\'ตรวจระยะพิมพ์ A6 ใบฟ้าและปัญหาช่องว่าง\')">📏 ตรวจระยะ A6</button>',
     '<button class="btn-chip" onclick="quick(\'ตรวจระบบ parity SHA-256 และสถานะ Cloud Runner\')">🛡️ ตรวจระบบ</button></div>',
@@ -1000,14 +1221,14 @@ function renderMobileDispatcherHtml_(endpointUrl) {
     'function quick(t){ document.getElementById("cmd").value = t; }',
     'function esc(s){ return String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }',
     'async function sendJob(){',
-    '  const t = tokEl.value.trim(); const p = document.getElementById("cmd").value.trim();',
+    '  const t = tokEl.value.trim(); const p = document.getElementById("cmd").value.trim(); const cb = document.getElementById("cbCmd").value.trim();',
     '  if(!t){ alert("กรุณาใส่ Token ก่อน"); return; }',
     '  if(!p){ alert("กรุณาพิมพ์คำสั่ง"); return; }',
     '  const b = document.getElementById("sendBtn"); b.disabled = true; b.innerText = "⏳ กำลังส่งและปลุก Cloud Runner...";',
     '  try{',
-    '    const r = await fetch(EP, { method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"}, body: JSON.stringify({ action:"SUBMIT_JOB", token:t, title:p.slice(0,90), promptText:p, source:"MOBILE_ONE_BOX" }) });',
+    '    const r = await fetch(EP, { method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"}, body: JSON.stringify({ action:"SUBMIT_JOB", token:t, title:p.slice(0,90), promptText:p, callbackPrompt:cb, source:"MOBILE_ONE_BOX" }) });',
     '    const d = await r.json();',
-    '    if(d.success){ document.getElementById("cmd").value = ""; await refresh(); } else { alert(d.error || "Error"); }',
+    '    if(d.success){ document.getElementById("cmd").value = ""; document.getElementById("cbCmd").value = ""; await refresh(); } else { alert(d.error || "Error"); }',
     '  }catch(e){ alert("เชื่อมต่อไม่ได้: " + e); }',
     '  finally{ b.disabled = false; b.innerText = "🚀 ส่งงานให้ระบบจัดการเอง"; }',
     '}',
@@ -1022,11 +1243,14 @@ function renderMobileDispatcherHtml_(endpointUrl) {
     '    document.getElementById("feed").innerHTML = all.map(function(j){',
     '      const st = String(j.status || "PENDING").toUpperCase();',
     '      const cls = st === "DONE" ? "b-done" : (st === "IN_PROGRESS" ? "b-prog" : "b-pending");',
+    '      const ack = (j.claimAckVerified || j.ackVerified) ? " ✓ACK" : "";',
+    '      const runLnk = (j.runUrl && /^https:\\/\\//.test(j.runUrl)) ? ("<div><a style=\'color:#7dd3fc;font-size:11px\' target=\'_blank\' href=\'" + esc(j.runUrl) + "\'>🔗 เปิดผลรัน GitHub Run</a></div>") : "";',
     '      return "<div class=\'job-item\'>"',
-    '        + "<div class=\'job-head\'><b>" + esc(j.jobId) + "</b><span class=\'badge " + cls + "\'>" + esc(st) + "</span></div>"',
+    '        + "<div class=\'job-head\'><b>" + esc(j.jobId) + "</b><span class=\'badge " + cls + "\'>" + esc(st + ack) + "</span></div>"',
     '        + "<div class=\'job-title\'>" + esc(j.title) + " <span class=\'job-lane\'>[" + esc(j.executionLane || "AUTO") + "]</span></div>"',
     '        + (j.summary ? "<div class=\'job-sum\'>ผลลัพธ์: " + esc(j.summary) + "</div>" : "")',
     '        + (j.advisorNote ? "<div class=\'job-adv\'>💡 แนะนำ: " + esc(j.advisorNote) + "</div>" : "")',
+    '        + runLnk',
     '        + "</div>";',
     '    }).join("") || "ยังไม่มีรายการ";',
     '  }catch(e){}',
