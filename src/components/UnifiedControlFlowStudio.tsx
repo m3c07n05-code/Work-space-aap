@@ -265,15 +265,22 @@ export const UnifiedControlFlowStudio: React.FC<UnifiedControlFlowStudioProps> =
     timestamp: string;
   } | null>(null);
 
+  const [gatewayConfig, setGatewayConfig] = useState(() => backendGateway.getConfig());
+
   useEffect(() => {
-    const unsub = backendGateway.onManifestChange((next) => {
+    const unsubManifest = backendGateway.onManifestChange((next) => {
       setManifest(next);
     });
-    return unsub;
+    const unsubConfig = backendGateway.onConfigChange((nextConfig) => {
+      setGatewayConfig(nextConfig);
+    });
+    return () => {
+      unsubManifest();
+      unsubConfig();
+    };
   }, []);
 
   const hasToken = backendGateway.hasGatewayToken();
-  const gatewayConfig = backendGateway.getConfig();
   const scopes = backendGateway.getScopes();
 
   const handleRunAudit = async () => {

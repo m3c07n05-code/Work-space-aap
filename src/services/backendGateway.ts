@@ -13,6 +13,20 @@ const STORAGE_KEY_CONFIG = 'nexus_gateway_config';
 const STORAGE_KEY_LOGS = 'nexus_gateway_logs';
 const STORAGE_KEY_SCOPES = 'nexus_scopes_data';
 
+export const PLACEHOLDER_GATEWAY_TOKENS = new Set([
+  'gas_auto_token_manifest_sync',
+  'nk_live_920f83ba7c1e4d',
+]);
+
+export function sanitizeGatewayToken(rawToken?: string, allowPlaceholder = false): string {
+  const trimmed = String(rawToken || '').trim();
+  if (!trimmed) return '';
+  if (!allowPlaceholder && PLACEHOLDER_GATEWAY_TOKENS.has(trimmed)) {
+    return '';
+  }
+  return trimmed;
+}
+
 export const DEFAULT_GAS_URL =
   'https://script.google.com/macros/s/AKfycbwTEboyfHQ0LzmrP0mtxWCYtrg13Jz5JqKpLVW-8Dtf3bWYqoc-ZoPObtZGjSlKriBU/exec';
 
@@ -91,7 +105,24 @@ class BackendGatewayService {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_CONFIG);
       if (saved) {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved) as Partial<GatewayConfig>;
+        const isSim = Boolean(parsed.isSimulationMode);
+        const cleanBaseUrl = String(parsed.baseUrl || DEFAULT_GAS_URL).trim() || DEFAULT_GAS_URL;
+        const cleanApiKey = sanitizeGatewayToken(parsed.apiKey, isSim);
+        const initialStatus: GatewayConfig['status'] = isSim
+          ? 'simulated'
+          : parsed.status === 'connected' && cleanApiKey
+            ? 'connected'
+            : 'offline';
+        return {
+          baseUrl: cleanBaseUrl,
+          webhookEndpoint: String(parsed.webhookEndpoint || '').trim(),
+          apiKey: cleanApiKey,
+          isSimulationMode: isSim,
+          status: initialStatus,
+          latencyMs: typeof parsed.latencyMs === 'number' ? parsed.latencyMs : 0,
+          lastPing: parsed.lastPing || '-',
+        };
       }
     } catch {
       // Fallback
@@ -100,11 +131,11 @@ class BackendGatewayService {
     return {
       baseUrl: DEFAULT_GAS_URL,
       webhookEndpoint: '',
-      apiKey: 'gas_auto_token_manifest_sync',
+      apiKey: '',
       isSimulationMode: false,
-      status: 'connected',
-      latencyMs: 18,
-      lastPing: new Date().toLocaleTimeString('th-TH'),
+      status: 'offline',
+      latencyMs: 0,
+      lastPing: '-',
     };
   }
 
@@ -257,9 +288,25 @@ class BackendGatewayService {
   }
 
   public updateConfig(newConfig: Partial<GatewayConfig>): GatewayConfig {
+    const nextIsSim =
+      newConfig.isSimulationMode !== undefined
+        ? Boolean(newConfig.isSimulationMode)
+        : this.config.isSimulationMode;
+    const nextBaseUrl =
+      newConfig.baseUrl !== undefined
+        ? String(newConfig.baseUrl).trim()
+        : this.config.baseUrl;
+    const nextApiKey =
+      newConfig.apiKey !== undefined
+        ? sanitizeGatewayToken(newConfig.apiKey, nextIsSim)
+        : sanitizeGatewayToken(this.config.apiKey, nextIsSim);
+
     this.config = {
       ...this.config,
       ...newConfig,
+      isSimulationMode: nextIsSim,
+      baseUrl: nextBaseUrl,
+      apiKey: nextApiKey,
     };
     try {
       localStorage.setItem(STORAGE_KEY_CONFIG, JSON.stringify(this.config));
@@ -316,8 +363,8 @@ class BackendGatewayService {
   }
 
   private getGasGatewayToken(): string {
-    const configured = String(this.config.apiKey || '').trim();
-    if (configured && configured !== 'gas_auto_token_manifest_sync' && configured !== 'nk_live_920f83ba7c1e4d') {
+    const configured = sanitizeGatewayToken(this.config.apiKey, false);
+    if (configured) {
       return configured;
     }
     try {
@@ -335,6 +382,8 @@ class BackendGatewayService {
     this.setSyncStatus('syncing');
     this.updateConfig({ status: 'testing' });
     const startTime = performance.now();
+    const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const timestamp = new Date().toLocaleTimeString('th-TH');
 
     if (this.config.isSimulationMode || !this.config.baseUrl) {
       await new Promise((r) => setTimeout(r, 350));
@@ -342,7 +391,7 @@ class BackendGatewayService {
       this.updateConfig({
         status: 'simulated',
         latencyMs,
-        lastPing: new Date().toLocaleTimeString('th-TH'),
+        lastPing: timestamp,
       });
       this.setSyncStatus('synced');
       return {
@@ -383,10 +432,38 @@ class BackendGatewayService {
         }
 
         const isSuccess = res.ok && Boolean(data.success);
+        const serverError =
+          typeof data?.error === 'string' && data.error.trim() ? data.error.trim() : '';
+
+        if (data?.manifest && typeof data.manifest === 'object') {
+          this.lastManifest = data.manifest as ProjectManifest;
+          this.notifyManifest();
+        }
+
+        const pingLog: PayloadLog = {
+          id: logId,
+          timestamp,
+          action: 'PING',
+          method: 'POST',
+          endpoint: this.config.baseUrl,
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          payload: {
+            action: 'PING',
+            source: 'NexusLedger_UI',
+            tokenConfigured: Boolean(gasToken),
+          },
+          status: res.status,
+          latencyMs,
+          response: data,
+          isSimulated: false,
+        };
+        this.logs = [pingLog, ...this.logs.slice(0, 49)];
+        this.notifyLogs();
+
         this.updateConfig({
           status: isSuccess ? 'connected' : 'offline',
           latencyMs,
-          lastPing: new Date().toLocaleTimeString('th-TH'),
+          lastPing: timestamp,
         });
         this.setSyncStatus('synced');
 
@@ -396,7 +473,7 @@ class BackendGatewayService {
           status: res.status,
           message: isSuccess
             ? 'เชื่อมต่อ Google Apps Script Web App สำเร็จ พร้อมส่งคำสั่ง'
-            : `เซิร์ฟเวอร์ตอบกลับแต่ไม่สำเร็จ (${res.status})`,
+            : serverError || `เซิร์ฟเวอร์ตอบกลับแต่ไม่สำเร็จ (${res.status})`,
         };
       }
 
@@ -411,7 +488,7 @@ class BackendGatewayService {
       this.updateConfig({
         status: res.ok ? 'connected' : 'offline',
         latencyMs,
-        lastPing: new Date().toLocaleTimeString('th-TH'),
+        lastPing: timestamp,
       });
       this.setSyncStatus('synced');
 
@@ -423,10 +500,26 @@ class BackendGatewayService {
       };
     } catch (err: unknown) {
       const latencyMs = Math.round(performance.now() - startTime);
+      const errMessage = err instanceof Error ? err.message : 'ไม่สามารถเชื่อมต่อปลายทางได้';
+      const errorLog: PayloadLog = {
+        id: logId,
+        timestamp,
+        action: 'PING',
+        method: 'POST',
+        endpoint: this.config.baseUrl,
+        headers: {},
+        payload: { action: 'PING', source: 'NexusLedger_UI' },
+        status: 504,
+        latencyMs,
+        response: { error: errMessage },
+        isSimulated: false,
+      };
+      this.logs = [errorLog, ...this.logs.slice(0, 49)];
+      this.notifyLogs();
       this.updateConfig({
         status: 'offline',
         latencyMs,
-        lastPing: new Date().toLocaleTimeString('th-TH'),
+        lastPing: timestamp,
       });
       this.setSyncStatus('synced');
 
@@ -434,9 +527,39 @@ class BackendGatewayService {
         success: false,
         latencyMs,
         status: 0,
-        message: err instanceof Error ? err.message : 'ไม่สามารถเชื่อมต่อปลายทางได้',
+        message: errMessage,
       };
     }
+  }
+
+  public async verifyAndSync(): Promise<{
+    ping: { success: boolean; latencyMs: number; status: number; message: string };
+    manifestSuccess: boolean;
+    manifestError?: string;
+    modulesCount: number;
+  }> {
+    const ping = await this.testConnection();
+    if (!ping.success || this.config.isSimulationMode) {
+      return {
+        ping,
+        manifestSuccess: false,
+        modulesCount: Array.isArray(this.lastManifest?.modules) ? this.lastManifest.modules.length : 0,
+      };
+    }
+
+    const manifestRes = await this.readManifest();
+    const modulesCount = Array.isArray(manifestRes.manifest?.modules)
+      ? manifestRes.manifest.modules.length
+      : Array.isArray(this.lastManifest?.modules)
+        ? this.lastManifest.modules.length
+        : 0;
+
+    return {
+      ping,
+      manifestSuccess: manifestRes.success,
+      manifestError: manifestRes.error,
+      modulesCount,
+    };
   }
 
   public async readManifest(overrideEndpoint?: string): Promise<{
@@ -444,6 +567,16 @@ class BackendGatewayService {
     manifest: ProjectManifest | null;
     error?: string;
   }> {
+    if (this.config.isSimulationMode && !overrideEndpoint) {
+      this.updateConfig({ status: 'simulated' });
+      this.setSyncStatus('synced');
+      return {
+        success: false,
+        manifest: this.lastManifest,
+        error: 'โหมดจำลองออฟไลน์เปิดอยู่ — ปิดโหมดจำลองเพื่อดึง Manifest จริงจาก Drive',
+      };
+    }
+
     this.setSyncStatus('syncing');
     const endpoint = overrideEndpoint || this.config.baseUrl;
     const isGas = endpoint.includes('script.google.com');

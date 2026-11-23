@@ -314,6 +314,7 @@ export const PayloadLogsModal: React.FC<PayloadLogsModalProps> = ({
                 ) : (
                   logs.map((log) => {
                     const isSelected = selectedLog?.id === log.id;
+                    const isFailed = log.status >= 400 || log.response?.success === false;
                     return (
                       <button
                         key={log.id}
@@ -325,7 +326,13 @@ export const PayloadLogsModal: React.FC<PayloadLogsModalProps> = ({
                         }`}
                       >
                         <div className="flex items-center justify-between text-[11px] mb-1">
-                          <span className="px-2 py-0.5 rounded-full font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-400 border border-emerald-200">
+                          <span
+                            className={`px-2 py-0.5 rounded-full font-bold border ${
+                              isFailed
+                                ? 'bg-rose-100 dark:bg-rose-950 text-rose-800 dark:text-rose-300 border-rose-200 dark:border-rose-800'
+                                : 'bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-400 border-emerald-200'
+                            }`}
+                          >
                             {log.status} {log.method}
                           </span>
                           <span className="text-slate-500 text-[10px]">{log.timestamp}</span>

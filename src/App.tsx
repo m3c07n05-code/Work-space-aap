@@ -162,6 +162,8 @@ export default function App() {
         <ConnectionStatusBanner
           config={config}
           onOpenGatewayModal={() => setIsGatewayModalOpen(true)}
+          onOpenLogsModal={() => setIsLogsModalOpen(true)}
+          livePayloadCount={manifestModules.length > 0 ? manifestModules.length : logCount}
         />
 
         {/* Back button banner if in a sub-menu */}

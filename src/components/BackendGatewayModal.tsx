@@ -1,6 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { X, Server, Key, Globe, Check, AlertCircle, RefreshCw, Eye, EyeOff, ShieldCheck } from 'lucide-react';
-import { backendGateway, DEFAULT_GAS_URL } from '../services/backendGateway';
+import {
+  backendGateway,
+  DEFAULT_GAS_URL,
+  PLACEHOLDER_GATEWAY_TOKENS,
+  sanitizeGatewayToken,
+} from '../services/backendGateway';
 import { GatewayConfig } from '../types';
 import { LiquidButton } from './ui/liquid-glass-button';
 
@@ -10,14 +15,26 @@ interface BackendGatewayModalProps {
   onOpenLogsDrawer: () => void;
 }
 
+function normalizeModalConfig(raw: GatewayConfig): GatewayConfig {
+  const isSim = Boolean(raw.isSimulationMode);
+  return {
+    ...raw,
+    baseUrl: String(raw.baseUrl || DEFAULT_GAS_URL).trim() || DEFAULT_GAS_URL,
+    apiKey: sanitizeGatewayToken(raw.apiKey, isSim),
+  };
+}
+
 export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
   isOpen,
   onClose,
   onOpenLogsDrawer,
 }) => {
-  const [config, setConfig] = useState<GatewayConfig>(backendGateway.getConfig());
+  const [config, setConfig] = useState<GatewayConfig>(() =>
+    normalizeModalConfig(backendGateway.getConfig())
+  );
   const [showApiKey, setShowApiKey] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [testResult, setTestResult] = useState<{
     success: boolean;
     message: string;
@@ -26,44 +43,98 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      setConfig(backendGateway.getConfig());
+      setConfig(normalizeModalConfig(backendGateway.getConfig()));
       setTestResult(null);
+      setIsSaving(false);
+      setIsTesting(false);
     }
   }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const handleSave = () => {
-    backendGateway.updateConfig(config);
-    onClose();
+  const buildCleanedConfig = (): GatewayConfig => {
+    const isSim = Boolean(config.isSimulationMode);
+    const cleanUrl = String(config.baseUrl || '').trim() || DEFAULT_GAS_URL;
+    const cleanKey = sanitizeGatewayToken(config.apiKey, isSim);
+    return {
+      ...config,
+      baseUrl: cleanUrl,
+      apiKey: cleanKey,
+      isSimulationMode: isSim,
+    };
+  };
+
+  const handleSave = async () => {
+    if (isSaving || isTesting) return;
+    const cleaned = buildCleanedConfig();
+    setConfig(cleaned);
+    setTestResult(null);
+    backendGateway.updateConfig(cleaned);
+
+    if (cleaned.isSimulationMode) {
+      backendGateway.updateConfig({ status: 'simulated' });
+      onClose();
+      return;
+    }
+
+    if (!backendGateway.hasGatewayToken()) {
+      setTestResult({
+        success: false,
+        message: 'กรุณาวางค่า Gateway Token ในช่อง Token ก่อนเชื่อมต่อ (เช็กว่าไม่มีช่องว่างหัว-ท้าย)',
+        latencyMs: 0,
+      });
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const syncRes = await backendGateway.verifyAndSync();
+      if (syncRes.ping.success) {
+        onClose();
+      } else {
+        setTestResult({
+          success: false,
+          message: syncRes.ping.message,
+          latencyMs: syncRes.ping.latencyMs,
+        });
+      }
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleTestConnection = async () => {
+    if (isSaving || isTesting) return;
     setIsTesting(true);
     setTestResult(null);
     try {
-      backendGateway.updateConfig(config);
-      const res = await backendGateway.testConnection();
+      const cleaned = buildCleanedConfig();
+      setConfig(cleaned);
+      backendGateway.updateConfig(cleaned);
+      const syncRes = await backendGateway.verifyAndSync();
+      const extraMsg = syncRes.manifestSuccess
+        ? ` • ซิงก์ Live Payloads (${syncRes.modulesCount} modules) แล้ว`
+        : syncRes.manifestError && syncRes.ping.success
+          ? ` • Manifest: ${syncRes.manifestError}`
+          : '';
       setTestResult({
-        success: res.success,
-        message: res.message,
-        latencyMs: res.latencyMs,
+        success: syncRes.ping.success,
+        message: `${syncRes.ping.message}${extraMsg}`,
+        latencyMs: syncRes.ping.latencyMs,
       });
     } finally {
       setIsTesting(false);
     }
   };
 
-  const PLACEHOLDER_TOKENS = new Set(['gas_auto_token_manifest_sync', 'nk_live_920f83ba7c1e4d']);
-
   const handlePresetGAS = () => {
     setConfig((prev) => {
       const currentKey = String(prev.apiKey || '').trim();
       const savedKey = String(backendGateway.getConfig().apiKey || '').trim();
       const preservedKey =
-        currentKey && !PLACEHOLDER_TOKENS.has(currentKey)
+        currentKey && !PLACEHOLDER_GATEWAY_TOKENS.has(currentKey)
           ? currentKey
-          : PLACEHOLDER_TOKENS.has(currentKey) && savedKey && !PLACEHOLDER_TOKENS.has(savedKey)
+          : PLACEHOLDER_GATEWAY_TOKENS.has(currentKey) && savedKey && !PLACEHOLDER_GATEWAY_TOKENS.has(savedKey)
             ? savedKey
             : '';
       return {
@@ -91,9 +162,11 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
     setTestResult(null);
   };
 
+  const isBusy = isTesting || isSaving;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/35 backdrop-blur-md animate-fade-in">
-      <div className="relative w-full max-w-2xl rounded-3xl bg-white/90 dark:bg-slate-900/90 backdrop-blur-3xl border border-white/90 dark:border-slate-800 shadow-[0_24px_60px_-12px_rgba(20,50,110,0.22)] overflow-hidden p-6 sm:p-8 space-y-6 text-[#14243A] dark:text-white">
+      <div className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-3xl bg-white/95 dark:bg-slate-900/95 backdrop-blur-3xl border border-white/90 dark:border-slate-800 shadow-[0_24px_60px_-12px_rgba(20,50,110,0.22)] p-6 sm:p-8 space-y-6 text-[#14243A] dark:text-white">
         {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b border-blue-100 dark:border-slate-800">
           <div className="flex items-center gap-3.5">
@@ -130,7 +203,16 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
               <input
                 type="checkbox"
                 checked={config.isSimulationMode}
-                onChange={(e) => setConfig({ ...config, isSimulationMode: e.target.checked })}
+                onChange={(e) => {
+                  const nextSim = e.target.checked;
+                  setConfig((prev) => ({
+                    ...prev,
+                    isSimulationMode: nextSim,
+                    apiKey: sanitizeGatewayToken(prev.apiKey, nextSim),
+                    baseUrl: !nextSim && prev.baseUrl.includes('nexusledger.io') ? DEFAULT_GAS_URL : prev.baseUrl,
+                  }));
+                  setTestResult(null);
+                }}
                 className="sr-only peer"
               />
               <div className="w-11 h-6 bg-slate-300 dark:bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
@@ -141,12 +223,14 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <span className="text-slate-500 font-medium">พรีเซ็ตปลายทาง:</span>
             <button
+              type="button"
               onClick={handlePresetGAS}
               className="px-3 py-1.5 rounded-xl bg-blue-100 text-blue-800 border border-blue-200 hover:bg-blue-200 transition cursor-pointer font-bold shadow-2xs"
             >
               ★ Google Apps Script ของคุณ (/exec)
             </button>
             <button
+              type="button"
               onClick={handlePresetSimulator}
               className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-blue-100 dark:border-slate-700 hover:bg-blue-50 text-slate-600 dark:text-slate-300 transition cursor-pointer font-medium"
             >
@@ -158,12 +242,13 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
           <div className="space-y-1.5">
             <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
               <Globe className="w-4 h-4 text-blue-600 dark:text-teal-400" />
-              <span>Web App URL ปลายทาง (<code className="text-blue-700 dark:text-teal-300 font-mono text-xs">https://script.google.com/macros/s/.../exec</code>)</span>
+              <span>Gateway URL (Web App URL ปลายทาง <code className="text-blue-700 dark:text-teal-300 font-mono text-xs">/exec</code>)</span>
             </label>
             <input
               type="text"
               value={config.baseUrl}
               onChange={(e) => setConfig({ ...config, baseUrl: e.target.value })}
+              onBlur={(e) => setConfig((prev) => ({ ...prev, baseUrl: e.target.value.trim() }))}
               placeholder="https://script.google.com/macros/s/.../exec"
               className="w-full px-4 py-3 rounded-2xl bg-white dark:bg-slate-950 border border-blue-200 dark:border-slate-800 text-sm font-mono text-[#14243A] dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-400 shadow-2xs transition-all"
             />
@@ -187,8 +272,10 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
               <input
                 type={showApiKey ? 'text' : 'password'}
                 value={config.apiKey}
-                onChange={(e) => setConfig({ ...config, apiKey: e.target.value })}
-                placeholder="ใส่ค่า Gateway Token (เก็บเฉพาะในเบราว์เซอร์เครื่องผู้ใช้)"
+                onChange={(e) => setConfig({ ...config, apiKey: e.target.value.trim() })}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="วางค่า Gateway Token ของคุณ (ตัดช่องว่างให้อัตโนมัติ)"
                 className="w-full px-4 py-3 rounded-2xl bg-white dark:bg-slate-950 border border-blue-200 dark:border-slate-800 text-sm font-mono text-[#14243A] dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-400 shadow-2xs transition-all pr-10"
               />
               <button
@@ -200,7 +287,7 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
               </button>
             </div>
             <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-              รหัสยืนยันสิทธิ์ <code className="font-mono font-bold text-blue-700 dark:text-teal-300">Gateway Token</code> จะถูกเก็บไว้เฉพาะใน <code className="font-mono">localStorage</code> ของเบราว์เซอร์เครื่องนี้เท่านั้น ไม่บันทึกลงซอร์สโค้ด (Zero-Secret 100%)
+              รหัสยืนยันสิทธิ์ <code className="font-mono font-bold text-blue-700 dark:text-teal-300">Gateway Token</code> ต้องตรงกับ Script Properties บน GAS และเก็บไว้เฉพาะใน <code className="font-mono">localStorage</code> ของเบราว์เซอร์เครื่องนี้เท่านั้น (Zero-Secret 100%)
             </p>
           </div>
 
@@ -220,7 +307,9 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
               )}
               <div className="flex-1">
                 <span className="font-bold">{testResult.message}</span>
-                <span className="ml-2 font-mono">({testResult.latencyMs}ms)</span>
+                {testResult.latencyMs > 0 && (
+                  <span className="ml-2 font-mono">({testResult.latencyMs}ms)</span>
+                )}
               </div>
             </div>
           )}
@@ -232,26 +321,28 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
             <LiquidButton
               size="sm"
               onClick={handleTestConnection}
-              disabled={isTesting}
+              disabled={isBusy}
               className="flex-1 sm:flex-none text-xs font-bold cursor-pointer"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isTesting ? 'animate-spin text-blue-600' : 'text-blue-600'}`} />
-              <span>{isTesting ? 'กำลังทดสอบ...' : 'ทดสอบ Ping'}</span>
+              <span>{isTesting ? 'กำลังทดสอบ...' : 'ทดสอบ Ping / Sync'}</span>
             </LiquidButton>
 
             <button
+              type="button"
               onClick={() => {
                 onClose();
                 onOpenLogsDrawer();
               }}
               className="text-xs text-blue-600 dark:text-teal-400 hover:underline font-semibold cursor-pointer px-2"
             >
-              ดู Payload Drawer
+              ดู Live Payloads
             </button>
           </div>
 
           <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
             <button
+              type="button"
               onClick={onClose}
               className="px-4 py-2.5 rounded-full bg-white dark:bg-slate-800 hover:bg-slate-50 text-slate-700 dark:text-slate-300 text-xs font-bold border border-blue-200 dark:border-slate-700 cursor-pointer transition shadow-2xs"
             >
@@ -262,11 +353,12 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
               variant="glowing"
               glow={true}
               size="default"
+              disabled={isBusy}
               onClick={handleSave}
               className="text-xs font-bold shadow-md cursor-pointer"
             >
               <Check className="w-4 h-4" />
-              <span>บันทึกและเชื่อมต่อทันที</span>
+              <span>{isSaving ? 'กำลังเชื่อมต่อ...' : 'บันทึกและเชื่อมต่อทันที'}</span>
             </LiquidButton>
           </div>
         </div>

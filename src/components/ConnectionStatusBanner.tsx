@@ -9,6 +9,7 @@ import {
   Key,
   AlertCircle,
   Cpu,
+  Terminal,
 } from 'lucide-react';
 import { backendGateway, SyncState } from '../services/backendGateway';
 import { GatewayConfig, ProjectManifest } from '../types';
@@ -18,11 +19,15 @@ import { GlassBox } from './ui/glass-box';
 interface ConnectionStatusBannerProps {
   config: GatewayConfig;
   onOpenGatewayModal: () => void;
+  onOpenLogsModal?: () => void;
+  livePayloadCount?: number;
 }
 
 export const ConnectionStatusBanner: React.FC<ConnectionStatusBannerProps> = ({
   config,
   onOpenGatewayModal,
+  onOpenLogsModal,
+  livePayloadCount,
 }) => {
   const [isPinging, setIsPinging] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -52,14 +57,18 @@ export const ConnectionStatusBanner: React.FC<ConnectionStatusBannerProps> = ({
     setIsPinging(true);
     setFeedback(null);
     try {
-      const res = await backendGateway.testConnection();
+      const syncRes = await backendGateway.verifyAndSync();
+      const res = syncRes.ping;
+      const syncDetail = syncRes.manifestSuccess
+        ? ` • Live Payloads: ${syncRes.modulesCount} modules`
+        : '';
       setFeedback({
         ok: res.success,
         text: res.success
-          ? `${res.message} (${res.latencyMs}ms)`
-          : `เชื่อมต่อไม่สำเร็จ: ${res.message} (${res.latencyMs}ms)`,
+          ? `${res.message}${syncDetail} (${res.latencyMs}ms)`
+          : `เชื่อมต่อไม่สำเร็จ: ${res.message}${res.latencyMs > 0 ? ` (${res.latencyMs}ms)` : ''}`,
       });
-      setTimeout(() => setFeedback(null), 5000);
+      setTimeout(() => setFeedback(null), 6000);
     } finally {
       setIsPinging(false);
     }
@@ -124,12 +133,14 @@ export const ConnectionStatusBanner: React.FC<ConnectionStatusBannerProps> = ({
     effectiveStatus === 'connected'
       ? hasToken
         ? 'พร้อมส่งคำสั่งขยายงานจริง'
-        : 'เชื่อมต่อได้ (แนะนำตั้งค่า Token)'
+        : 'ยังไม่ได้ตั้งค่า Token — กด "ตั้งค่า URL / Token"'
       : effectiveStatus === 'testing'
         ? 'กำลังตรวจสอบสัญญาณ...'
         : effectiveStatus === 'simulated'
           ? 'โหมดจำลองออฟไลน์ (ไม่ได้ยิง GAS จริง)'
-          : 'ออฟไลน์ — ตรวจสอบ URL หรือ Token';
+          : !hasToken
+            ? 'ยังไม่ได้ใส่ Token — กด "ตั้งค่า URL / Token" เพื่อวาง Gateway Token'
+            : 'ออฟไลน์ — ตรวจสอบ URL หรือ Token';
 
   const statusPillIsPositive = feedback ? feedback.ok : effectiveStatus === 'connected' && hasToken;
   const statusPillIsError = feedback ? !feedback.ok : effectiveStatus === 'offline';
@@ -229,10 +240,25 @@ export const ConnectionStatusBanner: React.FC<ConnectionStatusBannerProps> = ({
         </div>
 
         {/* Right: Latency & Frosted Cloudy Button Actions */}
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="text-xs font-mono text-slate-600 dark:text-slate-400 bg-slate-200/55 dark:bg-slate-800/80 backdrop-blur-xl px-3 py-1.5 rounded-full border border-white/90 dark:border-slate-700 shadow-[inset_0_1px_1px_rgba(255,255,255,0.9)]">
             Latency: <strong className="text-slate-900 dark:text-emerald-400 tabular-nums font-bold">{config.latencyMs}ms</strong>
           </div>
+
+          {onOpenLogsModal && (
+            <button
+              type="button"
+              onClick={onOpenLogsModal}
+              title="เปิด Live Payloads & โมดูลจาก Manifest จริง"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-mono font-bold bg-white/80 dark:bg-slate-800/90 hover:bg-white text-[#14243A] dark:text-slate-200 border border-white/95 dark:border-slate-700 shadow-2xs cursor-pointer transition"
+            >
+              <Terminal className="w-3.5 h-3.5 text-blue-600 dark:text-teal-400" />
+              <span>Live Payloads</span>
+              <span className="px-1.5 py-0.2 rounded-md bg-blue-50 dark:bg-slate-900 text-blue-700 dark:text-teal-300 tabular-nums">
+                {livePayloadCount ?? 0}
+              </span>
+            </button>
+          )}
 
           <LiquidButton
             size="sm"
@@ -241,7 +267,7 @@ export const ConnectionStatusBanner: React.FC<ConnectionStatusBannerProps> = ({
             className="text-xs font-semibold cursor-pointer"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isPinging ? 'animate-spin text-blue-600' : 'text-slate-700 dark:text-slate-200'}`} />
-            <span>{isPinging ? 'กำลังซิงค์...' : 'ทดสอบ Ping'}</span>
+            <span>{isPinging ? 'กำลังซิงค์...' : 'ทดสอบ Ping / Sync'}</span>
           </LiquidButton>
 
           <LiquidButton
