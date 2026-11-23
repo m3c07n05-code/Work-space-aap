@@ -54,14 +54,27 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
     }
   };
 
+  const PLACEHOLDER_TOKENS = new Set(['gas_auto_token_manifest_sync', 'nk_live_920f83ba7c1e4d']);
+
   const handlePresetGAS = () => {
-    setConfig({
-      baseUrl: DEFAULT_GAS_URL,
-      webhookEndpoint: '',
-      apiKey: 'gas_auto_token_manifest_sync',
-      isSimulationMode: false,
-      status: 'connected',
-      latencyMs: 18,
+    setConfig((prev) => {
+      const currentKey = String(prev.apiKey || '').trim();
+      const savedKey = String(backendGateway.getConfig().apiKey || '').trim();
+      const preservedKey =
+        currentKey && !PLACEHOLDER_TOKENS.has(currentKey)
+          ? currentKey
+          : PLACEHOLDER_TOKENS.has(currentKey) && savedKey && !PLACEHOLDER_TOKENS.has(savedKey)
+            ? savedKey
+            : '';
+      return {
+        ...prev,
+        baseUrl: DEFAULT_GAS_URL,
+        webhookEndpoint: '',
+        apiKey: preservedKey,
+        isSimulationMode: false,
+        status: preservedKey || backendGateway.hasGatewayToken() ? 'connected' : 'offline',
+        latencyMs: prev.latencyMs || 18,
+      };
     });
     setTestResult(null);
   };
@@ -161,16 +174,21 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
 
           {/* Secret / API Key */}
           <div className="space-y-1.5">
-            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-              <Key className="w-4 h-4 text-blue-600 dark:text-teal-400" />
-              <span>Session Token / Secret Key (หากมี)</span>
+            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1.5">
+                <Key className="w-4 h-4 text-blue-600 dark:text-teal-400" />
+                <span>Gateway Token (Apps Script Secret)</span>
+              </span>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                Local Browser Only (localStorage)
+              </span>
             </label>
             <div className="relative">
               <input
                 type={showApiKey ? 'text' : 'password'}
                 value={config.apiKey}
                 onChange={(e) => setConfig({ ...config, apiKey: e.target.value })}
-                placeholder="ระบุ Token เพื่อยืนยันสิทธิ์ก่อนยิงคำสั่ง"
+                placeholder="ใส่ค่า Gateway Token (เก็บเฉพาะในเบราว์เซอร์เครื่องผู้ใช้)"
                 className="w-full px-4 py-3 rounded-2xl bg-white dark:bg-slate-950 border border-blue-200 dark:border-slate-800 text-sm font-mono text-[#14243A] dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-400 shadow-2xs transition-all pr-10"
               />
               <button
@@ -181,6 +199,9 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
                 {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+              รหัสยืนยันสิทธิ์ <code className="font-mono font-bold text-blue-700 dark:text-teal-300">Gateway Token</code> จะถูกเก็บไว้เฉพาะใน <code className="font-mono">localStorage</code> ของเบราว์เซอร์เครื่องนี้เท่านั้น ไม่บันทึกลงซอร์สโค้ด (Zero-Secret 100%)
+            </p>
           </div>
 
           {/* Test Result Message */}

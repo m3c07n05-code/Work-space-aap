@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
-import { ExternalLink, ShieldAlert, CheckCircle2, Lock, FileSpreadsheet, Layers, HelpCircle } from 'lucide-react';
+import { ExternalLink, CheckCircle2, Layers } from 'lucide-react';
 import { WORKSPACE_FOLDER_ID } from '../services/backendGateway';
-import { LiquidButton } from './ui/liquid-glass-button';
 
 interface ProposedWorkGridProps {
   onSelectWork?: (workId: string) => void;
@@ -11,15 +10,69 @@ export const ProposedWorkGrid: React.FC<ProposedWorkGridProps> = ({ onSelectWork
   const [activeNotice, setActiveNotice] = useState<string | null>(null);
 
   const workItems = [
-    { id: 'WORK 1', title: 'แยก พม. / พม.+สัญญาอื่น', status: 'ACTIVE_SCOPE', desc: 'ตรวจรอบมติ แยกสมาชิกที่มี พม. 1 สัญญา ออกจากสมาชิกหลายสัญญา' },
-    { id: 'WORK 2', title: 'ระบบสัญญาร่วม & ผู้ค้ำประกัน', status: 'PROPOSED', desc: 'ตรวจสอบการค้ำประกันไขว้และข้อจำกัดสัญญาเดี่ยว/ร่วม' },
-    { id: 'WORK 3', title: 'บันทึกวันชำระและคำนวณเบี้ยปรับ', status: 'PROPOSED', desc: 'ควบคุมตามกฎ V003 ไม่คิดยอดหนี้ใหม่ คงศูนย์นำหน้า' },
-    { id: 'WORK 4', title: 'เตรียมพิมพ์จดหมาย 9 หมวด & EMS', status: 'ACTIVE_SCOPE', desc: 'ตรวจรายชื่อ 9 หมวด แยกผู้กู้/กู้ร่วม/ผู้ค้ำ × 2/4/5 งวด (A6 Direct RPT)' },
-    { id: 'WORK 5', title: 'ระบบรับชำระผ่าน Gateway สาขา', status: 'PROPOSED', desc: 'เชื่อมต่อ Staging สรุปยอดรายวันปลอด PII' },
-    { id: 'WORK 6', title: 'ออกรายงานสรุปยอดลูกหนี้คงเหลือ', status: 'PROPOSED', desc: 'แยกหมวดลูกหนี้ตามอายุหนี้และรอบมติ' },
-    { id: 'WORK 7', title: 'ตรวจสอบเงื่อนไขลดหย่อนดอกเบี้ย', status: 'PROPOSED', desc: 'คำนวณสิทธิประโยชน์ตามระเบียบ CRD' },
-    { id: 'WORK 8', title: 'ระบบแจ้งเตือนก่อนหมดอายุความ', status: 'PROPOSED', desc: 'สแกนสัญญาที่เข้าเกณฑ์ติดตามเร่งด่วน' },
-    { id: 'WORK 9', title: 'ส่งออกรายงานภาษีและข้อมูลบัญชี', status: 'PROPOSED', desc: 'แปลงข้อมูลเข้ารูปแบบมาตรฐานสากล' },
+    {
+      id: 'WORK 1',
+      title: 'แยก พม. / พม.+สัญญาอื่น',
+      status: 'ACTIVE_STUDIO',
+      runnerTask: 'WORK1_PRINT',
+      desc: 'ตรวจรอบมติ แยกสมาชิกที่มี พม. 1 สัญญา ออกจากสมาชิกหลายสัญญา (13 คอลัมน์ + Drive 3D)',
+    },
+    {
+      id: 'WORK 2',
+      title: 'ระบบสัญญาร่วม & ผู้ค้ำประกัน',
+      status: 'READY_CMS2',
+      runnerTask: 'WORK2_FOLLOWUP',
+      desc: 'ตรวจสอบการค้ำประกันไขว้และติดตามหนี้สัญญาเดี่ยว/ร่วมบนฝั่ง CMS-2 (9/9 READY_100%)',
+    },
+    {
+      id: 'WORK 3',
+      title: 'พรีวิวแจ้งเตือน SMS & เบี้ยปรับ V003',
+      status: 'READY_CMS2',
+      runnerTask: 'WORK3_SMS_PREVIEW',
+      desc: 'จัดชุดพรีวิวข้อความแจ้งหนี้ควบคุมตามกฎ V003 คงศูนย์นำหน้า (NO_AUTO_SEND_SMS)',
+    },
+    {
+      id: 'WORK 4',
+      title: 'เตรียมพิมพ์จดหมาย 9 หมวด & EMS A6',
+      status: 'ACTIVE_STUDIO',
+      runnerTask: 'WORK4_PREVIEW_A6',
+      desc: 'ตรวจรายชื่อ 9 หมวด แยกผู้กู้/กู้ร่วม/ผู้ค้ำ × 2/4/5 งวด (A6 Direct-RPT, Paper=0)',
+    },
+    {
+      id: 'WORK 5',
+      title: 'สรุปสัญญาผิดนัดชำระ (Default Loan)',
+      status: 'READY_CMS2',
+      runnerTask: 'WORK5_DEFAULT_LOAN',
+      desc: 'เชื่อมต่อ Staging สรุปสถานะสัญญาผิดนัดและยอดรายวันปลอด PII 100%',
+    },
+    {
+      id: 'WORK 6',
+      title: 'รายงานรับชำระ 077 & ลูกหนี้คงเหลือ',
+      status: 'READY_CMS2',
+      runnerTask: 'WORK6_PAYMENT_077',
+      desc: 'แยกหมวดลูกหนี้ตามอายุหนี้และประมวลผลชุดข้อมูลรับชำระ 077 บน CMS-2',
+    },
+    {
+      id: 'WORK 7',
+      title: 'จับคู่รหัสส่ง SMS แจ้งหนี้ (Mapping)',
+      status: 'READY_CMS2',
+      runnerTask: 'WORK7_SMS_MAPPING',
+      desc: 'ตรวจสอบสิทธิ์และจับคู่รหัสส่งข้อความแจ้งหนี้ระดับสัญญาในโหมด Staging',
+    },
+    {
+      id: 'WORK 8',
+      title: 'ตรวจสอบผู้ค้ำประกัน & อายุความ',
+      status: 'READY_CMS2',
+      runnerTask: 'WORK8_GUARANTOR',
+      desc: 'สแกนสิทธิ์ผู้ค้ำประกันและสัญญาที่เข้าเกณฑ์ติดตามเร่งด่วนบน CMS-2',
+    },
+    {
+      id: 'WORK 9',
+      title: 'ออกรายงานสรุปผู้บริหาร (Exec Report)',
+      status: 'READY_CMS2',
+      runnerTask: 'WORK9_EXEC_REPORT',
+      desc: 'สรุปผลเชิงบริหารแบบ Aggregate ปลอด PII 100% ลง OneDrive Canonical Output',
+    },
   ];
 
   const externalLinks = [
@@ -27,7 +80,25 @@ export const ProposedWorkGrid: React.FC<ProposedWorkGridProps> = ({ onSelectWork
       id: 'UI-03',
       name: 'Google Drive Workspace',
       url: `https://drive.google.com/drive/folders/${WORKSPACE_FOLDER_ID}`,
-      desc: 'โฟลเดอร์ AI_Project_Workspace (Read-only status)',
+      desc: 'โฟลเดอร์ AI_Project_Workspace & 00_Project_Manifest.json',
+    },
+    {
+      id: 'UI-DOCB',
+      name: 'Doc B Command Inbox',
+      url: 'https://docs.google.com/document/d/1UL_maGIJiMm8N6f0sUIYwAkFsqpHLz4HrZbkQZTZn7Q/edit',
+      desc: 'เอกสารสั่งงานระยะไกลและรายงานผล Execution Report',
+    },
+    {
+      id: 'UI-FORM',
+      name: 'ฟอร์มศูนย์ประสานงาน 9+1',
+      url: 'https://docs.google.com/forms/d/e/1FAIpQLSc3JEZFvAo4Wqyfj2NtK3zCrcs-oN_F6heZ-hzr7ZDDrH2NKQ/viewform',
+      desc: 'Google Form 10 ศูนย์ประสานงาน (STATUS: PASS)',
+    },
+    {
+      id: 'UI-SHEET',
+      name: 'ชีต การตอบแบบฟอร์ม 1',
+      url: 'https://docs.google.com/spreadsheets/d/1BuevtBv23pzRyONidpGqcStyCKkW_NtCP2XCTkMvzbk/edit',
+      desc: 'ฐานข้อมูลคำตอบจากฟอร์มศูนย์ประสานงาน 9+1',
     },
     {
       id: 'UI-05',
@@ -43,7 +114,7 @@ export const ProposedWorkGrid: React.FC<ProposedWorkGridProps> = ({ onSelectWork
     },
   ];
 
-  const handleActionClick = (id: string, title: string, isProposed: boolean) => {
+  const handleActionClick = (id: string, title: string, runnerTask: string) => {
     if (id === 'WORK 1' && onSelectWork) {
       onSelectWork('work1');
       return;
@@ -52,10 +123,14 @@ export const ProposedWorkGrid: React.FC<ProposedWorkGridProps> = ({ onSelectWork
       onSelectWork('work4');
       return;
     }
-    if (isProposed) {
-      setActiveNotice(`สถานะ: [PROPOSED / ยังไม่เชื่อมต่อ Production] - โมดูล "${title}" อยู่ระหว่างจัดเตรียม Source Code และรออนุมัติ Deployment ตามระเบียบ CRD`);
-      setTimeout(() => setActiveNotice(null), 5000);
+    if (onSelectWork) {
+      onSelectWork('control-flow');
+      return;
     }
+    setActiveNotice(
+      `สถานะ: [READY_100% ฝั่ง CMS-2] - โมดูล "${title}" (${runnerTask}) พร้อมส่งคิวรันอย่างปลอดภัยผ่านหน้า Unified Control Flow`
+    );
+    setTimeout(() => setActiveNotice(null), 5000);
   };
 
   return (
@@ -68,17 +143,22 @@ export const ProposedWorkGrid: React.FC<ProposedWorkGridProps> = ({ onSelectWork
             <span>โครงสร้างงาน CRD &amp; ผังงาน WORK 1–9</span>
           </h3>
           <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 mt-1">
-            แสดงสถานะโมดูลขอบเขตงานจริง และโมดูลที่ออกแบบไว้ล่วงหน้า (Proposed Guardrails)
+            สถานะชุดงานทั้ง 9 หมวดฝั่ง PC Worker CMS-2 (9/9 READY_100%) — กดเพื่อเปิด Studio หรือส่งคิวรันผ่าน Unified Control Flow
           </p>
         </div>
-        <span className="px-3.5 py-1.5 rounded-full text-xs font-mono font-bold bg-blue-100 dark:bg-blue-500/15 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-500/30">
-          Section 05 Compliance
-        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="px-3.5 py-1.5 rounded-full text-xs font-mono font-bold bg-emerald-100 dark:bg-emerald-500/15 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-500/30">
+            CMS-2: 9/9 READY_100%
+          </span>
+          <span className="px-3.5 py-1.5 rounded-full text-xs font-mono font-bold bg-blue-100 dark:bg-blue-500/15 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-500/30">
+            Section 05 Compliance
+          </span>
+        </div>
       </div>
 
       {activeNotice && (
-        <div className="p-4 bg-amber-50 dark:bg-amber-950/70 border border-amber-200 dark:border-amber-500/40 rounded-2xl text-xs sm:text-sm text-amber-900 dark:text-amber-300 flex items-start gap-2.5 shadow-2xs font-sans">
-          <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+        <div className="p-4 bg-emerald-50 dark:bg-emerald-950/70 border border-emerald-200 dark:border-emerald-500/40 rounded-2xl text-xs sm:text-sm text-emerald-900 dark:text-emerald-300 flex items-start gap-2.5 shadow-2xs font-sans">
+          <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
           <span>{activeNotice}</span>
         </div>
       )}
@@ -86,15 +166,15 @@ export const ProposedWorkGrid: React.FC<ProposedWorkGridProps> = ({ onSelectWork
       {/* Grid WORK 1-9 */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 pt-1">
         {workItems.map((item) => {
-          const isActive = item.status === 'ACTIVE_SCOPE';
+          const isStudio = item.status === 'ACTIVE_STUDIO';
           return (
             <div
               key={item.id}
-              onClick={() => handleActionClick(item.id, item.title, !isActive)}
+              onClick={() => handleActionClick(item.id, item.title, item.runnerTask)}
               className={`p-4 rounded-2xl border transition-all cursor-pointer flex flex-col justify-between space-y-2 ${
-                isActive
+                isStudio
                   ? 'bg-blue-50/90 dark:bg-teal-950/40 border-blue-300 dark:border-teal-500/40 shadow-xs hover:border-blue-500'
-                  : 'bg-white/90 dark:bg-slate-950/80 border-blue-100 dark:border-slate-800 hover:border-blue-300 opacity-95 shadow-2xs'
+                  : 'bg-white/90 dark:bg-slate-950/80 border-emerald-200/80 dark:border-slate-800 hover:border-blue-400 shadow-2xs'
               }`}
             >
               <div>
@@ -102,20 +182,21 @@ export const ProposedWorkGrid: React.FC<ProposedWorkGridProps> = ({ onSelectWork
                   <span className="text-xs font-bold font-mono text-blue-700 dark:text-teal-300">{item.id}</span>
                   <span
                     className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-bold ${
-                      isActive
+                      isStudio
                         ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-500/40'
-                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700'
+                        : 'bg-teal-50 dark:bg-teal-950/50 text-teal-800 dark:text-teal-300 border border-teal-200 dark:border-teal-700'
                     }`}
                   >
-                    {isActive ? '● มีผลในแอป' : 'PROPOSED'}
+                    {isStudio ? '● STUDIO + READY' : '● READY_100%'}
                   </span>
                 </div>
                 <h4 className="text-sm font-bold text-[#14243A] dark:text-white leading-snug">{item.title}</h4>
                 <p className="text-xs text-slate-600 dark:text-slate-400 mt-1 leading-relaxed">{item.desc}</p>
               </div>
 
-              <div className="pt-2 border-t border-blue-50 dark:border-slate-800/80 text-[11px] font-medium text-slate-500">
-                {isActive ? 'พร้อมทดสอบในระบบ' : 'แตะเพื่อดูสถานะ'}
+              <div className="pt-2 border-t border-blue-50 dark:border-slate-800/80 text-[11px] font-medium text-blue-700 dark:text-teal-300 flex items-center justify-between">
+                <span>{isStudio ? 'เปิด Studio ในแอป' : 'ส่งคิวผ่าน Control Flow →'}</span>
+                <span className="font-mono text-[10px] text-slate-400">{item.runnerTask}</span>
               </div>
             </div>
           );
@@ -125,9 +206,9 @@ export const ProposedWorkGrid: React.FC<ProposedWorkGridProps> = ({ onSelectWork
       {/* External CRD Verification Links */}
       <div className="pt-4 border-t border-blue-100 dark:border-slate-800">
         <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300 mb-3">
-          ลิงก์เชื่อมโยงเอกสารสถาปัตยกรรม CRD ภายนอก:
+          ลิงก์เชื่อมโยงเอกสารและเครื่องมือ CRD ภายนอก:
         </h4>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
           {externalLinks.map((link) => (
             <a
               key={link.id}

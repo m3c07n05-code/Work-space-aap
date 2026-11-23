@@ -117,6 +117,60 @@ export interface ManifestModule {
   uiPreviewData?: Record<string, unknown>;
 }
 
+export interface ManifestJobRecord {
+  jobId: string;
+  type?: string;
+  taskType?: string;
+  taskId?: string;
+  title?: string;
+  status?: string;
+  source?: string;
+  docId?: string;
+  contentHash?: string;
+  promptText?: string;
+  createdAtIso?: string;
+  claimedBy?: string;
+  claimedAtIso?: string;
+  completedAtIso?: string;
+  summary?: string;
+  [key: string]: unknown;
+}
+
+export interface ManifestDeviceRecord {
+  deviceId?: string;
+  deviceType?: string;
+  label?: string;
+  lastSeenIso?: string;
+  lastHeartbeatIso?: string;
+  status?: string;
+  zeroPiiEnforced?: boolean;
+  printGate?: string;
+  lastStageAlert?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface FolderConsolidationInfo {
+  status?: string;
+  date?: string;
+  archivedFolders?: number;
+  archivedFiles?: number;
+  workRunnerStatus?: string;
+  viewreportPureRptCount?: number;
+  viewreportNonRptCount?: number;
+  [key: string]: unknown;
+}
+
+export interface CoordinationCenterFormInfo {
+  status?: string;
+  verifiedAt?: string;
+  centersCount?: number;
+  formId?: string;
+  responderUrl?: string;
+  sheetId?: string;
+  sheetName?: string;
+  [key: string]: unknown;
+}
+
 export interface ProjectManifest {
   projectName?: string;
   project?: string;
@@ -127,11 +181,53 @@ export interface ProjectManifest {
   activeTask?: Record<string, unknown> | null;
   modules: ManifestModule[];
   history_logs?: string[];
-  devices?: Record<string, unknown>;
+  devices?: Record<string, ManifestDeviceRecord>;
   scopes?: any[];
   gateLogs?: any[];
+  pendingJobs?: ManifestJobRecord[];
+  completedJobs?: ManifestJobRecord[];
+  docBState?: Record<string, unknown>;
+  updateLogs?: Array<Record<string, unknown>>;
+  gasScriptProjectId?: string;
+  gasTokenProvisioned?: boolean;
+  gasDeployStatus?: string;
+  webCrdHost?: string;
+  webCrdPlatform?: string;
+  folderConsolidation?: FolderConsolidationInfo;
+  coordinationCenterForm?: CoordinationCenterFormInfo;
   lastPingIso?: string;
   lastEventId?: string;
+}
+
+export type AuditCheckStatus = 'PASS' | 'WARN' | 'FAIL' | 'INFO';
+
+export interface AuditCheckItem {
+  id: string;
+  category: 'FRONTEND' | 'GATEWAY' | 'DRIVE' | 'WORKER' | 'DOC_B' | 'SECURITY';
+  label: string;
+  status: AuditCheckStatus;
+  detail: string;
+  meta?: string;
+  actionHint?: string;
+}
+
+export interface SiteAuditReport {
+  checkedAtIso: string;
+  overallStatus: 'READY' | 'PARTIAL' | 'ACTION_REQUIRED';
+  latencyMs: number;
+  checks: AuditCheckItem[];
+  manifest: ProjectManifest | null;
+  recommendedAction: string;
+}
+
+export interface WorkerTaskSpec {
+  taskType: string;
+  label: string;
+  category: 'SYSTEM' | 'WORK1_9' | 'WORK4_PRINT' | 'V003_DATA';
+  description: string;
+  zeroPii: boolean;
+  paperZero: boolean;
+  defaultTitle: string;
 }
 
 

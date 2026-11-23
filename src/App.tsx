@@ -20,12 +20,22 @@ import { AICommandDispatcher } from './components/AICommandDispatcher';
 import { LiquidNavbar, NimbusIcons, LiquidNavItem } from './components/ui/liquid-glass-navbar';
 import { Work4PrintStudio } from './components/Work4PrintStudio';
 import { Work1AndBackupStudio } from './components/Work1AndBackupStudio';
+import { UnifiedControlFlowStudio } from './components/UnifiedControlFlowStudio';
 
 import { backendGateway } from './services/backendGateway';
 import { GatewayConfig, ManifestModule } from './types';
 import { Terminal, ArrowLeft } from 'lucide-react';
 
-export type ActiveTabType = 'overview' | 'work1' | 'work4' | 'scope-builder' | 'ai-studio' | 'stop-gates' | 'gascode' | 'proposed-work';
+export type ActiveTabType =
+  | 'overview'
+  | 'control-flow'
+  | 'work1'
+  | 'work4'
+  | 'scope-builder'
+  | 'ai-studio'
+  | 'stop-gates'
+  | 'gascode'
+  | 'proposed-work';
 
 
 export default function App() {
@@ -169,6 +179,7 @@ export default function App() {
               <span>← กลับหน้าหลัก (Hub)</span>
             </button>
             <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
+              {activeTab === 'control-flow' && 'Unified Control & Audit Flow (ตรวจเว็บ • ดึงงาน • รันสคริปต์ • เชื่อมเครื่องมือ)'}
               {activeTab === 'work1' && 'WORK 1: ตาราง 13 คอลัมน์ & สำรอง Drive 3D'}
               {activeTab === 'work4' && 'WORK 4: ระบบพิมพ์หนังสือบอกกล่าว A6'}
               {activeTab === 'ai-studio' && 'Google AI UI Studio'}
@@ -186,6 +197,17 @@ export default function App() {
             config={config}
             scopesCount={scopesCount}
             logCount={logCount}
+            onNavigate={(view) => setActiveTab(view as ActiveTabType)}
+            onOpenGatewayModal={() => setIsGatewayModalOpen(true)}
+            onOpenLogsModal={() => setIsLogsModalOpen(true)}
+            onOpenExportModal={() => setIsExportModalOpen(true)}
+            theme={theme}
+          />
+        )}
+
+        {/* View: Unified Control & Audit Flow (4-Step Command Center) */}
+        {activeTab === 'control-flow' && (
+          <UnifiedControlFlowStudio
             onNavigate={(view) => setActiveTab(view as ActiveTabType)}
             onOpenGatewayModal={() => setIsGatewayModalOpen(true)}
             onOpenLogsModal={() => setIsLogsModalOpen(true)}

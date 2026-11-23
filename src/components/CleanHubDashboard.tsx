@@ -23,7 +23,7 @@ interface CleanHubDashboardProps {
   config: GatewayConfig;
   scopesCount: number;
   logCount: number;
-  onNavigate: (view: 'ai-studio' | 'scope-builder' | 'stop-gates' | 'gascode' | 'proposed-work' | 'work1' | 'work4') => void;
+  onNavigate: (view: 'control-flow' | 'ai-studio' | 'scope-builder' | 'stop-gates' | 'gascode' | 'proposed-work' | 'work1' | 'work4') => void;
   onOpenGatewayModal: () => void;
   onOpenLogsModal: () => void;
   onOpenExportModal?: () => void;
@@ -138,6 +138,53 @@ export const CleanHubDashboard: React.FC<CleanHubDashboardProps> = ({
 
   return (
     <section className="space-y-6">
+      {/* Unified Control & Audit Flow Hero Card */}
+      <GlassBox
+        variant="highlight"
+        interactive={true}
+        onClick={() => onNavigate('control-flow')}
+        className="p-6 sm:p-7 space-y-4 group"
+      >
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-bold bg-blue-100 dark:bg-teal-500/20 text-blue-900 dark:text-teal-300 border border-blue-200 dark:border-teal-500/40">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                NEW • UNIFIED CONTROL FLOW
+              </span>
+              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold bg-emerald-100/90 dark:bg-emerald-500/20 text-emerald-900 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-500/40">
+                4-STEP AUDIT &amp; DISPATCH
+              </span>
+            </div>
+            <h2 className="text-lg sm:text-2xl font-bold tracking-tight text-[#14243A] dark:text-white group-hover:text-blue-700 dark:group-hover:text-teal-300 transition-colors">
+              ศูนย์ควบคุมและตรวจสอบครบวงจร (ตรวจเว็บ • ดึงงาน • รันสคริปต์ครบจบ)
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 max-w-2xl leading-relaxed">
+              ตรวจสุขภาพเว็บและ Token แบบ 1-Click Audit, ดึงสถานะ <code className="font-mono font-bold">{MANIFEST_FILE_NAME}</code> + OneDrive 21/21 + ฟอร์ม 9+1, ส่งคิวงาน 14 Allowlist สู่ <code className="font-mono font-bold">CMS-2</code> และเข้าถึงทุกปลายทางในที่เดียว
+            </p>
+          </div>
+
+          <div className="shrink-0">
+            <LiquidButton
+              type="button"
+              size="lg"
+              variant="glowing"
+              glow={true}
+              beacon={true}
+              onClick={(e) => {
+                e.stopPropagation();
+                onNavigate('control-flow');
+              }}
+              className="w-full md:w-auto text-xs sm:text-sm font-bold cursor-pointer"
+            >
+              <Zap className="w-4 h-4 text-blue-600 dark:text-teal-300" />
+              <span>เปิด Unified Control Flow</span>
+              <ArrowRight className="w-4 h-4" />
+            </LiquidButton>
+          </div>
+        </div>
+      </GlassBox>
+
       {/* Expanded Clean Header Banner */}
       <GlassBox variant="frosted" className="p-6 sm:p-8 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
