@@ -2,16 +2,16 @@ import React, { useState, useEffect } from 'react';
 import {
   Wifi,
   RefreshCw,
-  Copy,
-  Check,
   CheckCircle2,
   SlidersHorizontal,
   Key,
   AlertCircle,
   Cpu,
   Terminal,
+  Globe,
 } from 'lucide-react';
 import { backendGateway, SyncState } from '../services/backendGateway';
+import { resolveCms2StatusFromManifest } from '../services/work4Service';
 import { GatewayConfig, ProjectManifest } from '../types';
 import { LiquidButton } from './ui/liquid-glass-button';
 import { GlassBox } from './ui/glass-box';
@@ -30,10 +30,10 @@ export const ConnectionStatusBanner: React.FC<ConnectionStatusBannerProps> = ({
   livePayloadCount,
 }) => {
   const [isPinging, setIsPinging] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
   const [syncState, setSyncState] = useState<SyncState>(() => backendGateway.getSyncState());
   const [manifest, setManifest] = useState<ProjectManifest | null>(() => backendGateway.getManifest());
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
 
   useEffect(() => {
     const unsubscribeSync = backendGateway.onSyncStateChange((newState) => {
@@ -41,11 +41,31 @@ export const ConnectionStatusBanner: React.FC<ConnectionStatusBannerProps> = ({
     });
     const unsubscribeManifest = backendGateway.onManifestChange((nextManifest) => {
       setManifest(nextManifest);
+      setNowMs(Date.now());
     });
     return () => {
       unsubscribeSync();
       unsubscribeManifest();
     };
+  }, []);
+
+  // Keep relative CMS-2 heartbeat age fresh every 30s and trigger background refresh if approaching stale (>2m)
+  useEffect(() => {
+    const tickTimer = setInterval(() => {
+      const currentMs = Date.now();
+      setNowMs(currentMs);
+      if (typeof document !== 'undefined' && document.hidden) return;
+      const cfg = backendGateway.getConfig();
+      if (cfg.isSimulationMode || !backendGateway.hasGatewayUrl() || !backendGateway.hasGatewayToken()) {
+        return;
+      }
+      const cms2 = resolveCms2StatusFromManifest(backendGateway.getManifest(), currentMs);
+      if (!cms2.hasDevice || cms2.ageMin === null || cms2.ageMin >= 2) {
+        void backendGateway.readManifest(undefined, { background: true });
+      }
+    }, 30_000);
+
+    return () => clearInterval(tickTimer);
   }, []);
 
   // Trigger a brief sync indicator transition whenever config latency/baseUrl changes externally
@@ -59,6 +79,7 @@ export const ConnectionStatusBanner: React.FC<ConnectionStatusBannerProps> = ({
     try {
       const syncRes = await backendGateway.verifyAndSync();
       const res = syncRes.ping;
+      setNowMs(Date.now());
       const syncDetail = syncRes.manifestSuccess
         ? ` • Live Payloads: ${syncRes.modulesCount} modules`
         : '';
@@ -74,13 +95,8 @@ export const ConnectionStatusBanner: React.FC<ConnectionStatusBannerProps> = ({
     }
   };
 
-  const handleCopyUrl = () => {
-    navigator.clipboard.writeText(config.baseUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
   const isSyncing = syncState.status === 'syncing' || isPinging;
+  const hasUrl = backendGateway.hasGatewayUrl();
   const hasToken = backendGateway.hasGatewayToken();
 
   const effectiveStatus = config.isSimulationMode && config.status !== 'testing'
@@ -114,35 +130,26 @@ export const ConnectionStatusBanner: React.FC<ConnectionStatusBannerProps> = ({
     },
   }[effectiveStatus];
 
-  const devicesMap = manifest?.devices || {};
-  const cms2Key = Object.keys(devicesMap).find((k) => {
-    const entry = devicesMap[k];
-    return (
-      k.toUpperCase().includes('CMS-2') ||
-      String(entry?.deviceId || '').toUpperCase().includes('CMS-2') ||
-      String(entry?.label || '').toUpperCase().includes('CMS-2')
-    );
-  });
-  const cms2 = cms2Key ? devicesMap[cms2Key] : undefined;
-  const cms2LastSeen = cms2 ? String(cms2.lastSeenIso || cms2.lastHeartbeatIso || '') : '';
-  const cms2Ms = cms2LastSeen ? Date.parse(cms2LastSeen) : NaN;
-  const cms2AgeMin = Number.isFinite(cms2Ms) ? Math.max(0, Math.round((Date.now() - cms2Ms) / 60000)) : null;
-  const isCms2Online = Boolean(cms2 && cms2AgeMin !== null && cms2AgeMin <= 5);
+  const cms2State = resolveCms2StatusFromManifest(manifest, nowMs);
+  const cms2 = cms2State.hasDevice;
+  const cms2LastSeen = cms2State.lastSeenIso;
+  const cms2AgeMin = cms2State.ageMin;
+  const isCms2Online = cms2State.isOnline;
 
   const defaultFeedbackText =
     effectiveStatus === 'connected'
-      ? hasToken
+      ? hasUrl && hasToken
         ? 'พร้อมส่งคำสั่งขยายงานจริง'
-        : 'ยังไม่ได้ตั้งค่า Token — กด "ตั้งค่า URL / Token"'
+        : 'ยังไม่ได้ตั้งค่า URL / Token — กด "ตั้งค่า URL / Token"'
       : effectiveStatus === 'testing'
         ? 'กำลังตรวจสอบสัญญาณ...'
         : effectiveStatus === 'simulated'
           ? 'โหมดจำลองออฟไลน์ (ไม่ได้ยิง GAS จริง)'
-          : !hasToken
-            ? 'ยังไม่ได้ใส่ Token — กด "ตั้งค่า URL / Token" เพื่อวาง Gateway Token'
+          : !hasUrl || !hasToken
+            ? 'ยังไม่ได้ใส่ URL หรือ Token — กด "ตั้งค่า URL / Token" (เก็บเฉพาะ localStorage)'
             : 'ออฟไลน์ — ตรวจสอบ URL หรือ Token';
 
-  const statusPillIsPositive = feedback ? feedback.ok : effectiveStatus === 'connected' && hasToken;
+  const statusPillIsPositive = feedback ? feedback.ok : effectiveStatus === 'connected' && hasUrl && hasToken;
   const statusPillIsError = feedback ? !feedback.ok : effectiveStatus === 'offline';
 
   return (
@@ -189,7 +196,7 @@ export const ConnectionStatusBanner: React.FC<ConnectionStatusBannerProps> = ({
               <span
                 title={
                   cms2
-                    ? `CMS-2 LastSeen: ${cms2LastSeen || 'N/A'} | Status: ${String(cms2.status || 'UNKNOWN')}`
+                    ? `CMS-2 LastSeen: ${cms2LastSeen || 'N/A'} | Status: ${cms2State.statusLabel}`
                     : 'ยังไม่มีข้อมูล Heartbeat ของเครื่อง CMS-2 จาก Manifest'
                 }
                 className={`px-2.5 py-0.5 rounded-full text-xs font-mono font-bold border flex items-center gap-1.5 shadow-2xs backdrop-blur-md ${
@@ -205,7 +212,7 @@ export const ConnectionStatusBanner: React.FC<ConnectionStatusBannerProps> = ({
                   {isCms2Online
                     ? 'CMS-2: Online'
                     : cms2
-                      ? `CMS-2: ${cms2AgeMin !== null ? `ล่าสุด ${cms2AgeMin}m` : String(cms2.status || 'Standby')}`
+                      ? `CMS-2: ${cms2AgeMin !== null ? `ล่าสุด ${cms2AgeMin}m` : cms2State.statusLabel}`
                       : 'CMS-2: รอข้อมูล'}
                 </span>
               </span>
@@ -234,7 +241,7 @@ export const ConnectionStatusBanner: React.FC<ConnectionStatusBannerProps> = ({
               </span>
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              เชื่อมตรงกับ Web App อัปเดตข้อมูลเข้า Google Drive อัตโนมัติ (ซิงค์ล่าสุด: {syncState.updatedAt})
+              เชื่อมตรงกับ Gateway อัปเดตข้อมูลเข้า Google Drive อัตโนมัติ (ซิงค์ล่าสุด: {syncState.updatedAt})
             </p>
           </div>
         </div>
@@ -281,21 +288,22 @@ export const ConnectionStatusBanner: React.FC<ConnectionStatusBannerProps> = ({
         </div>
       </div>
 
-      {/* URL Display Bar - Frosted Cloudy Glass */}
+      {/* Zero-Secret Local Gateway Status Bar (No public URL exposure) */}
       <div className="bg-slate-200/45 dark:bg-slate-900/90 backdrop-blur-xl border border-white/85 dark:border-slate-800 rounded-2xl p-3 flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 text-xs shadow-[inset_0_1px_2px_rgba(255,255,255,0.85)]">
-        <div className="flex items-center gap-2 truncate min-w-0">
-          <span className="text-slate-500 font-mono font-semibold shrink-0">Web App:</span>
-          <span className="font-mono text-slate-800 dark:text-slate-200 truncate select-all">{config.baseUrl}</span>
-        </div>
+        <button
+          type="button"
+          onClick={onOpenGatewayModal}
+          className="flex items-center gap-2 min-w-0 cursor-pointer text-left hover:opacity-85 transition-opacity"
+          title="Gateway URL เก็บเฉพาะใน localStorage ของเบราว์เซอร์เครื่องนี้เท่านั้น"
+        >
+          <Globe className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+          <span className="font-mono font-semibold text-slate-700 dark:text-slate-200 truncate">
+            {hasUrl
+              ? 'Gateway URL: ตั้งค่าแล้ว (Local Browser Only)'
+              : 'Gateway URL: ยังไม่ใส่ — กด "ตั้งค่า URL / Token"'}
+          </span>
+        </button>
         <div className="flex items-center gap-2 shrink-0">
-          <button
-            onClick={handleCopyUrl}
-            className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-slate-200/70 dark:bg-slate-800 hover:bg-white/90 text-slate-800 dark:text-slate-200 border border-white/95 dark:border-slate-700 shadow-[inset_0_1px_1px_rgba(255,255,255,0.95)] transition-colors cursor-pointer text-xs font-semibold backdrop-blur-md"
-            title="คัดลอก URL"
-          >
-            {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5 text-slate-600" />}
-            <span>{copied ? 'คัดลอกแล้ว' : 'คัดลอก'}</span>
-          </button>
           <span
             className={`font-semibold text-xs flex items-center gap-1 px-3 py-1 rounded-full border backdrop-blur-md ${
               statusPillIsError

@@ -38,7 +38,6 @@ import {
 } from 'lucide-react';
 import {
   backendGateway,
-  DEFAULT_GAS_URL,
   MANIFEST_FILE_NAME,
   WORKSPACE_FOLDER_ID,
 } from '../services/backendGateway';
@@ -438,10 +437,10 @@ export const UnifiedControlFlowStudio: React.FC<UnifiedControlFlowStudioProps> =
     },
     {
       id: 'gas-gateway',
-      name: 'GAS Gateway Index (/exec)',
-      subtitle: manifest?.gasDeployStatus || 'Apps Script Web App Gateway',
+      name: 'GAS Gateway Index (Local Config)',
+      subtitle: manifest?.gasDeployStatus || 'Apps Script Gateway (เก็บเฉพาะใน localStorage)',
       status: gatewayConfig.status === 'connected' ? 'CONNECTED' : gatewayConfig.status.toUpperCase(),
-      url: gatewayConfig.baseUrl || DEFAULT_GAS_URL,
+      url: '',
       icon: <Server className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />,
     },
     {
@@ -1262,15 +1261,9 @@ export const UnifiedControlFlowStudio: React.FC<UnifiedControlFlowStudioProps> =
 
         {/* External Connected Destinations */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
-          {ecosystemDestinations.map((dest) => (
-            <a
-              key={dest.id}
-              href={dest.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="p-4 rounded-2xl bg-white/85 dark:bg-slate-900/85 border border-slate-200/80 dark:border-slate-800 hover:border-blue-400 dark:hover:border-teal-400 transition-all shadow-2xs group flex flex-col justify-between space-y-2.5"
-            >
-              <div className="flex items-start justify-between gap-2">
+          {ecosystemDestinations.map((dest) => {
+            const cardInner = (
+              <div className="flex items-start justify-between gap-2 w-full">
                 <div className="flex items-center gap-2.5 min-w-0">
                   <div className="w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center shrink-0">
                     {dest.icon}
@@ -1278,7 +1271,11 @@ export const UnifiedControlFlowStudio: React.FC<UnifiedControlFlowStudioProps> =
                   <div className="min-w-0">
                     <div className="text-xs sm:text-sm font-bold text-[#14243A] dark:text-white group-hover:text-blue-700 dark:group-hover:text-teal-300 truncate flex items-center gap-1">
                       <span className="truncate">{dest.name}</span>
-                      <ExternalLink className="w-3 h-3 shrink-0 opacity-70" />
+                      {dest.url ? (
+                        <ExternalLink className="w-3 h-3 shrink-0 opacity-70" />
+                      ) : (
+                        <Settings className="w-3 h-3 shrink-0 opacity-70" />
+                      )}
                     </div>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
                       {dest.subtitle}
@@ -1290,8 +1287,33 @@ export const UnifiedControlFlowStudio: React.FC<UnifiedControlFlowStudioProps> =
                   {dest.status}
                 </span>
               </div>
-            </a>
-          ))}
+            );
+
+            if (!dest.url) {
+              return (
+                <button
+                  key={dest.id}
+                  type="button"
+                  onClick={onOpenGatewayModal}
+                  className="p-4 rounded-2xl bg-white/85 dark:bg-slate-900/85 border border-slate-200/80 dark:border-slate-800 hover:border-blue-400 dark:hover:border-teal-400 transition-all shadow-2xs group flex flex-col justify-between space-y-2.5 text-left cursor-pointer"
+                >
+                  {cardInner}
+                </button>
+              );
+            }
+
+            return (
+              <a
+                key={dest.id}
+                href={dest.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="p-4 rounded-2xl bg-white/85 dark:bg-slate-900/85 border border-slate-200/80 dark:border-slate-800 hover:border-blue-400 dark:hover:border-teal-400 transition-all shadow-2xs group flex flex-col justify-between space-y-2.5"
+              >
+                {cardInner}
+              </a>
+            );
+          })}
         </div>
 
         {/* Internal Studios Quick Switcher */}

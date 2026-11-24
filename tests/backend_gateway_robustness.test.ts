@@ -157,7 +157,7 @@ async function runRobustnessTests() {
     console.log('  ✓ Test 7 Passed: verifyAndSync transitioned to connected and synced 2 modules.\n');
 
     // Test 8: readManifest guard when in Simulation Mode
-    console.log('[Test 8/8] Verifying readManifest returns early cleanly in Simulation Mode...');
+    console.log('[Test 8/10] Verifying readManifest returns early cleanly in Simulation Mode...');
     backendGateway.updateConfig({ isSimulationMode: true });
     const simManifestRes = await backendGateway.readManifest();
     if (simManifestRes.success !== false || !simManifestRes.error?.includes('โหมดจำลอง')) {
@@ -165,8 +165,76 @@ async function runRobustnessTests() {
     }
     console.log('  ✓ Test 8 Passed: readManifest cleanly guarded in Simulation Mode.\n');
 
+    // Test 9: Zero-Hardcoded-URL default & missing URL guard
+    console.log('[Test 9/10] Verifying no hardcoded GAS URL default and empty URL fails closed...');
+    const { DEFAULT_GAS_URL } = await import('../src/services/backendGateway');
+    if (DEFAULT_GAS_URL !== '') {
+      throw new Error(`Expected DEFAULT_GAS_URL to be empty string, got: "${DEFAULT_GAS_URL}"`);
+    }
+    backendGateway.updateConfig({ isSimulationMode: false, baseUrl: '', apiKey: 'real_secret_token_123' });
+    const emptyUrlConn = await backendGateway.testConnection();
+    if (emptyUrlConn.success !== false || backendGateway.getConfig().status !== 'offline') {
+      throw new Error(`Expected empty URL to fail closed as offline, got: ${JSON.stringify(emptyUrlConn)}`);
+    }
+    console.log('  ✓ Test 9 Passed: Zero hardcoded GAS URL and empty URL fails closed cleanly.\n');
+
+    // Test 10: work4Service resolves CMS2_LIVE / OFFLINE_MOCK from Manifest devices["CMS-2"]
+    console.log('[Test 10/10] Verifying work4Service resolves CMS-2 online status from Manifest devices["CMS-2"]...');
+    const { work4Service, resolveCms2StatusFromManifest } = await import('../src/services/work4Service');
+    const freshIso = new Date(Date.now() - 30_000).toISOString();
+    const staleIso = new Date(Date.now() - 8 * 60_000).toISOString();
+    const freshCheck = resolveCms2StatusFromManifest({
+      modules: [],
+      devices: { 'CMS-2': { deviceId: 'CMS-2', status: 'ONLINE', lastSeenIso: freshIso, printGate: 'LOCKED_ZERO_PAPER' } },
+    });
+    const staleCheck = resolveCms2StatusFromManifest({
+      modules: [],
+      devices: { 'CMS-2': { deviceId: 'CMS-2', status: 'ONLINE', lastSeenIso: staleIso } },
+    });
+    if (!freshCheck.isOnline || staleCheck.isOnline) {
+      throw new Error(`Unexpected CMS-2 freshness check: fresh=${JSON.stringify(freshCheck)}, stale=${JSON.stringify(staleCheck)}`);
+    }
+    // Feed live manifest containing CMS-2 through mock GAS server and verify work4Service.getStatus()
+    let cms2ManifestIso = freshIso;
+    const cms2Server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        manifest: {
+          devices: {
+            'CMS-2': { deviceId: 'CMS-2', status: 'ONLINE', lastSeenIso: cms2ManifestIso, printGate: 'LOCKED_ZERO_PAPER' },
+          },
+          modules: [],
+        },
+      }));
+    });
+    await new Promise<void>((resolve) => cms2Server.listen(0, '127.0.0.1', () => resolve()));
+    try {
+      const cms2Port = (cms2Server.address() as { port: number }).port;
+      backendGateway.updateConfig({
+        isSimulationMode: false,
+        baseUrl: `http://127.0.0.1:${cms2Port}/exec?script.google.com=true`,
+        apiKey: 'real_secret_token_123',
+      });
+      await backendGateway.readManifest(undefined, { background: true });
+      work4Service.clearManualOverride();
+      const liveStatus = await work4Service.getStatus('2026', '11');
+      if (liveStatus.mode !== 'CMS2_LIVE' || !liveStatus.printer_status.is_ready) {
+        throw new Error(`Expected CMS2_LIVE from fresh Manifest, got: ${JSON.stringify(liveStatus)}`);
+      }
+      cms2ManifestIso = staleIso;
+      await backendGateway.readManifest(undefined, { background: true });
+      const offlineStatus = await work4Service.getStatus('2026', '11');
+      if (offlineStatus.mode !== 'OFFLINE_MOCK' || offlineStatus.printer_status.is_ready) {
+        throw new Error(`Expected OFFLINE_MOCK from stale Manifest, got: ${JSON.stringify(offlineStatus)}`);
+      }
+    } finally {
+      cms2Server.close();
+    }
+    console.log('  ✓ Test 10 Passed: work4Service dynamically switches CMS2_LIVE/OFFLINE_MOCK from Manifest devices["CMS-2"].\n');
+
     console.log('===============================================================');
-    console.log('🎉 ALL 8 ROBUSTNESS TESTS PASSED CLEANLY (Zero TypeError / Stream Reuse)');
+    console.log('🎉 ALL 10 ROBUSTNESS TESTS PASSED CLEANLY (Zero TypeError / Stream Reuse)');
     console.log('===============================================================');
   } finally {
     server.close();

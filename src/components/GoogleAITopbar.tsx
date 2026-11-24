@@ -24,12 +24,13 @@ export const GoogleAITopbar: React.FC<GoogleAITopbarProps> = ({
   theme = 'light',
   onToggleTheme,
 }) => {
+  const hasUrl = backendGateway.hasGatewayUrl();
   const hasToken = backendGateway.hasGatewayToken();
   const effectiveStatus =
     config.isSimulationMode && config.status !== 'testing' ? 'simulated' : config.status;
 
   const pillMeta =
-    effectiveStatus === 'connected' && hasToken
+    effectiveStatus === 'connected' && hasUrl && hasToken
       ? {
           label: 'Connected',
           pillClass:
@@ -50,9 +51,9 @@ export const GoogleAITopbar: React.FC<GoogleAITopbarProps> = ({
                 'text-amber-700 dark:text-amber-300 bg-amber-50/90 dark:bg-amber-500/15 border-amber-200 dark:border-amber-500/30',
               dotClass: 'bg-amber-500',
             }
-          : !hasToken
+          : !hasUrl || !hasToken
             ? {
-                label: 'No Token',
+                label: !hasUrl ? 'No URL' : 'No Token',
                 pillClass:
                   'text-amber-700 dark:text-amber-300 bg-amber-50/90 dark:bg-amber-500/15 border-amber-200 dark:border-amber-500/30',
                 dotClass: 'bg-amber-500',

@@ -102,7 +102,7 @@
 
       <div class="bg-slate-950/80 border border-slate-800/90 rounded-xl px-3 py-2 flex items-center justify-between gap-2">
         <div class="truncate text-[11px] mono text-teal-300" id="activeUrlDisplay">
-          https://script.google.com/macros/s/AKfycbwTEboyfHQ0LzmrP0mtxWCYtrg13Jz5JqKpLVW-8Dtf3bWYqoc-ZoPObtZGjSlKriBU/exec
+          Local Browser Only (localStorage)
         </div>
         <span id="pingStatusToast" class="shrink-0 text-[11px] text-emerald-400 font-medium">● พร้อมยิงคำสั่งจริง</span>
       </div>
@@ -293,15 +293,16 @@
         <button id="btnCloseGatewayModal" type="button" class="text-slate-400 hover:text-white font-bold">✕</button>
       </div>
       <div class="space-y-2">
-        <label for="inputGatewayUrl" class="block text-xs text-slate-300">Web App URL (<code class="mono text-teal-300">https://script.google.com/macros/s/.../exec</code>)</label>
-        <input id="inputGatewayUrl" type="url"
-          value="https://script.google.com/macros/s/AKfycbwTEboyfHQ0LzmrP0mtxWCYtrg13Jz5JqKpLVW-8Dtf3bWYqoc-ZoPObtZGjSlKriBU/exec"
+        <label for="inputGatewayUrl" class="block text-xs text-slate-300">Gateway URL (<code class="mono text-teal-300">Local Browser Only</code>)</label>
+        <input id="inputGatewayUrl" type="password"
+          value=""
+          placeholder="วาง Gateway URL ของคุณ (localStorage)"
           class="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-xs mono text-teal-300 focus:outline-none focus:border-teal-400" />
-        <p class="text-[11px] text-slate-400">ลิงก์ของคุณถูกตั้งเป็นค่าเริ่มต้นไว้ให้เรียบร้อยแล้ว สามารถกดบันทึกและทดสอบยิงสัญญาณได้ทันที</p>
+        <p class="text-[11px] text-slate-400">เก็บเฉพาะใน localStorage ของเบราว์เซอร์เครื่องนี้เท่านั้น</p>
       </div>
       <div class="flex items-center justify-end gap-2 pt-2">
         <button id="btnResetDefaultUrl" type="button" class="px-3 py-2 rounded-xl bg-slate-800 text-xs text-slate-300 hover:bg-slate-700">
-          คืนค่าลิงก์ของคุณ
+          ล้างช่อง URL
         </button>
         <button id="btnSaveGatewayUrl" type="button" class="px-4 py-2 rounded-xl bg-teal-400 text-slate-950 font-bold text-xs hover:bg-teal-300">
           บันทึกและเชื่อมต่อทันที
@@ -311,10 +312,10 @@
   </div>
 
   <script>
-    const DEFAULT_GAS_URL = "https://script.google.com/macros/s/AKfycbwTEboyfHQ0LzmrP0mtxWCYtrg13Jz5JqKpLVW-8Dtf3bWYqoc-ZoPObtZGjSlKriBU/exec";
+    const DEFAULT_GAS_URL = "";
 
     const state = {
-      gatewayUrl: DEFAULT_GAS_URL,
+      gatewayUrl: (typeof localStorage !== "undefined" && localStorage.getItem("nexus_gas_url")) || DEFAULT_GAS_URL,
       scopes: [
         {
           id: "CRD-SCOPE-01",

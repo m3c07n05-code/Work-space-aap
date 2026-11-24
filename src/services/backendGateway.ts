@@ -27,8 +27,24 @@ export function sanitizeGatewayToken(rawToken?: string, allowPlaceholder = false
   return trimmed;
 }
 
-export const DEFAULT_GAS_URL =
-  'https://script.google.com/macros/s/AKfycbwTEboyfHQ0LzmrP0mtxWCYtrg13Jz5JqKpLVW-8Dtf3bWYqoc-ZoPObtZGjSlKriBU/exec';
+export const DEFAULT_GAS_URL = '';
+
+export function maskEndpointForLog(rawEndpoint?: string): string {
+  const trimmed = String(rawEndpoint || '').trim();
+  if (!trimmed) return 'not-configured';
+  if (trimmed.includes('script.google.com')) {
+    return 'GAS Web App (Local Browser Config)';
+  }
+  try {
+    const parsed = new URL(trimmed);
+    parsed.searchParams.delete('token');
+    parsed.searchParams.delete('gatewayToken');
+    parsed.searchParams.delete('CRD_GATEWAY_TOKEN');
+    return `${parsed.origin}${parsed.pathname}${parsed.search}`;
+  } catch {
+    return trimmed.split('?')[0];
+  }
+}
 
 export const WORKSPACE_FOLDER_ID = '1RvGehvlDrPTaR9JvQgCcFPqiQbRE8_yn'; // AI_Project_Workspace
 export const MANIFEST_FILE_NAME = '00_Project_Manifest.json';
@@ -107,11 +123,11 @@ class BackendGatewayService {
       if (saved) {
         const parsed = JSON.parse(saved) as Partial<GatewayConfig>;
         const isSim = Boolean(parsed.isSimulationMode);
-        const cleanBaseUrl = String(parsed.baseUrl || DEFAULT_GAS_URL).trim() || DEFAULT_GAS_URL;
+        const cleanBaseUrl = String(parsed.baseUrl || '').trim();
         const cleanApiKey = sanitizeGatewayToken(parsed.apiKey, isSim);
         const initialStatus: GatewayConfig['status'] = isSim
           ? 'simulated'
-          : parsed.status === 'connected' && cleanApiKey
+          : parsed.status === 'connected' && cleanBaseUrl && cleanApiKey
             ? 'connected'
             : 'offline';
         return {
@@ -129,7 +145,7 @@ class BackendGatewayService {
     }
 
     return {
-      baseUrl: DEFAULT_GAS_URL,
+      baseUrl: '',
       webhookEndpoint: '',
       apiKey: '',
       isSimulationMode: false,
@@ -155,7 +171,7 @@ class BackendGatewayService {
         timestamp: new Date().toLocaleTimeString('th-TH'),
         action: 'INIT_GATEWAY_BINDING',
         method: 'POST',
-        endpoint: DEFAULT_GAS_URL,
+        endpoint: 'GAS Web App (Local Browser Config)',
         headers: {
           'Content-Type': 'application/json',
           'X-Target-Manifest': MANIFEST_FILE_NAME,
@@ -170,7 +186,7 @@ class BackendGatewayService {
         status: 200,
         latencyMs: 18,
         response: {
-          status: 'CONNECTED',
+          status: 'READY_FOR_LOCAL_CONFIG',
           backend: 'Google Apps Script Web App',
           targetManifest: MANIFEST_FILE_NAME,
           driveWorkspace: 'AI_Project_Workspace',
@@ -385,7 +401,7 @@ class BackendGatewayService {
     const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const timestamp = new Date().toLocaleTimeString('th-TH');
 
-    if (this.config.isSimulationMode || !this.config.baseUrl) {
+    if (this.config.isSimulationMode) {
       await new Promise((r) => setTimeout(r, 350));
       const latencyMs = Math.round(performance.now() - startTime);
       this.updateConfig({
@@ -399,6 +415,21 @@ class BackendGatewayService {
         latencyMs,
         status: 200,
         message: 'โหมดจำลอง (Simulator) ตอบสนองปกติ',
+      };
+    }
+
+    if (!this.config.baseUrl) {
+      this.updateConfig({
+        status: 'offline',
+        latencyMs: 0,
+        lastPing: timestamp,
+      });
+      this.setSyncStatus('synced');
+      return {
+        success: false,
+        latencyMs: 0,
+        status: 0,
+        message: 'ยังไม่ได้ตั้งค่า Gateway URL ในเบราว์เซอร์ — กด "ตั้งค่า URL / Token"',
       };
     }
 
@@ -445,7 +476,7 @@ class BackendGatewayService {
           timestamp,
           action: 'PING',
           method: 'POST',
-          endpoint: this.config.baseUrl,
+          endpoint: maskEndpointForLog(this.config.baseUrl),
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           payload: {
             action: 'PING',
@@ -506,7 +537,7 @@ class BackendGatewayService {
         timestamp,
         action: 'PING',
         method: 'POST',
-        endpoint: this.config.baseUrl,
+        endpoint: maskEndpointForLog(this.config.baseUrl),
         headers: {},
         payload: { action: 'PING', source: 'NexusLedger_UI' },
         status: 504,
@@ -562,11 +593,15 @@ class BackendGatewayService {
     };
   }
 
-  public async readManifest(overrideEndpoint?: string): Promise<{
+  public async readManifest(
+    overrideEndpoint?: string,
+    options?: { background?: boolean }
+  ): Promise<{
     success: boolean;
     manifest: ProjectManifest | null;
     error?: string;
   }> {
+    const isBackground = Boolean(options?.background);
     if (this.config.isSimulationMode && !overrideEndpoint) {
       this.updateConfig({ status: 'simulated' });
       this.setSyncStatus('synced');
@@ -577,8 +612,20 @@ class BackendGatewayService {
       };
     }
 
-    this.setSyncStatus('syncing');
-    const endpoint = overrideEndpoint || this.config.baseUrl;
+    const endpoint = String(overrideEndpoint || this.config.baseUrl || '').trim();
+    if (!endpoint) {
+      this.updateConfig({ status: 'offline' });
+      this.setSyncStatus('synced');
+      return {
+        success: false,
+        manifest: this.lastManifest,
+        error: 'ยังไม่ได้ตั้งค่า Gateway URL ในเบราว์เซอร์ (localStorage)',
+      };
+    }
+
+    if (!isBackground) {
+      this.setSyncStatus('syncing');
+    }
     const isGas = endpoint.includes('script.google.com');
     const startTime = performance.now();
     const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
@@ -614,22 +661,24 @@ class BackendGatewayService {
         this.notifyManifest();
       }
 
-      const log: PayloadLog = {
-        id: logId,
-        timestamp,
-        action: 'GET_MANIFEST',
-        method: 'GET',
-        endpoint: url,
-        headers: {},
-        payload: { action: 'GET_MANIFEST' },
-        status: response.status,
-        latencyMs,
-        response: data,
-        isSimulated: false,
-      };
+      if (!isBackground || !isSuccess) {
+        const log: PayloadLog = {
+          id: logId,
+          timestamp,
+          action: 'GET_MANIFEST',
+          method: 'GET',
+          endpoint: maskEndpointForLog(endpoint),
+          headers: {},
+          payload: { action: 'GET_MANIFEST' },
+          status: response.status,
+          latencyMs,
+          response: data,
+          isSimulated: false,
+        };
 
-      this.logs = [log, ...this.logs.slice(0, 49)];
-      this.notifyLogs();
+        this.logs = [log, ...this.logs.slice(0, 49)];
+        this.notifyLogs();
+      }
       this.updateConfig({ latencyMs, lastPing: timestamp, status: isSuccess ? 'connected' : 'offline' });
       this.setSyncStatus('synced');
 
@@ -648,7 +697,7 @@ class BackendGatewayService {
         timestamp,
         action: 'GET_MANIFEST',
         method: 'GET',
-        endpoint: overrideEndpoint || this.config.baseUrl,
+        endpoint: maskEndpointForLog(endpoint),
         headers: {},
         payload: { action: 'GET_MANIFEST' },
         status: 504,
@@ -677,7 +726,7 @@ class BackendGatewayService {
   ): Promise<{ success: boolean; log: PayloadLog }> {
     this.setSyncStatus('syncing');
     const startTime = performance.now();
-    const endpoint = overrideEndpoint || this.config.baseUrl;
+    const endpoint = String(overrideEndpoint || this.config.baseUrl || '').trim();
     const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const timestamp = new Date().toLocaleTimeString('th-TH');
 
@@ -715,7 +764,7 @@ class BackendGatewayService {
         timestamp,
         action,
         method: 'POST',
-        endpoint: endpoint || DEFAULT_GAS_URL,
+        endpoint: endpoint ? maskEndpointForLog(endpoint) : 'local-simulator',
         headers,
         payload: payloadEnvelope,
         status: 200,
@@ -729,6 +778,27 @@ class BackendGatewayService {
       this.updateConfig({ latencyMs, lastPing: timestamp });
       this.setSyncStatus('synced');
       return { success: true, log: simLog };
+    }
+
+    if (!endpoint) {
+      const missingUrlLog: PayloadLog = {
+        id: logId,
+        timestamp,
+        action,
+        method: 'POST',
+        endpoint: 'not-configured',
+        headers,
+        payload: payloadEnvelope,
+        status: 0,
+        latencyMs: 0,
+        response: { error: 'ยังไม่ได้ตั้งค่า Gateway URL ในเบราว์เซอร์ (localStorage)' },
+        isSimulated: false,
+      };
+      this.logs = [missingUrlLog, ...this.logs.slice(0, 49)];
+      this.notifyLogs();
+      this.updateConfig({ status: 'offline' });
+      this.setSyncStatus('synced');
+      return { success: false, log: missingUrlLog };
     }
 
     try {
@@ -765,7 +835,7 @@ class BackendGatewayService {
           timestamp,
           action,
           method: 'POST',
-          endpoint,
+          endpoint: maskEndpointForLog(endpoint),
           headers,
           payload: payloadEnvelope,
           status: response.status,
@@ -807,7 +877,7 @@ class BackendGatewayService {
         timestamp,
         action,
         method: 'POST',
-        endpoint,
+        endpoint: maskEndpointForLog(endpoint),
         headers,
         payload: payloadEnvelope,
         status: response.status,
@@ -828,7 +898,7 @@ class BackendGatewayService {
         timestamp,
         action,
         method: 'POST',
-        endpoint,
+        endpoint: maskEndpointForLog(endpoint),
         headers,
         payload: payloadEnvelope,
         status: 504,
@@ -845,6 +915,10 @@ class BackendGatewayService {
       this.setSyncStatus('synced');
       return { success: false, log: errorLog };
     }
+  }
+
+  public hasGatewayUrl(): boolean {
+    return Boolean(String(this.config.baseUrl || '').trim());
   }
 
   public hasGatewayToken(): boolean {
@@ -867,6 +941,7 @@ class BackendGatewayService {
 
   public async runSiteAudit(): Promise<SiteAuditReport> {
     const checkedAtIso = new Date().toISOString();
+    const hasUrl = this.hasGatewayUrl();
     const hasToken = this.hasGatewayToken();
     const isSimulation = Boolean(this.config.isSimulationMode);
     const origin =
@@ -889,8 +964,8 @@ class BackendGatewayService {
       detail: isSimulation
         ? `Host: ${origin} (Offline Simulator เปิดอยู่ — ปิดเพื่อยิงคำสั่งจริง)`
         : `Host: ${origin} • Live Gateway Mode (Simulation OFF)`,
-      meta: `Web App Target: ${this.config.baseUrl.includes('script.google.com') ? 'GAS /exec' : this.config.baseUrl}`,
-      actionHint: isSimulation ? 'OPEN_GATEWAY_MODAL' : undefined,
+      meta: `Gateway Target: ${hasUrl ? 'Local Browser Config (localStorage)' : 'ยังไม่ตั้งค่า (localStorage)'}`,
+      actionHint: isSimulation || !hasUrl ? 'OPEN_GATEWAY_MODAL' : undefined,
     });
 
     // 2. GAS Gateway & Zero-Secret Token

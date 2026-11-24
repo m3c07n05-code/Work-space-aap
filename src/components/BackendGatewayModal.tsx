@@ -2,8 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { X, Server, Key, Globe, Check, AlertCircle, RefreshCw, Eye, EyeOff, ShieldCheck } from 'lucide-react';
 import {
   backendGateway,
-  DEFAULT_GAS_URL,
-  PLACEHOLDER_GATEWAY_TOKENS,
   sanitizeGatewayToken,
 } from '../services/backendGateway';
 import { GatewayConfig } from '../types';
@@ -19,7 +17,7 @@ function normalizeModalConfig(raw: GatewayConfig): GatewayConfig {
   const isSim = Boolean(raw.isSimulationMode);
   return {
     ...raw,
-    baseUrl: String(raw.baseUrl || DEFAULT_GAS_URL).trim() || DEFAULT_GAS_URL,
+    baseUrl: String(raw.baseUrl || '').trim(),
     apiKey: sanitizeGatewayToken(raw.apiKey, isSim),
   };
 }
@@ -32,6 +30,7 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
   const [config, setConfig] = useState<GatewayConfig>(() =>
     normalizeModalConfig(backendGateway.getConfig())
   );
+  const [showBaseUrl, setShowBaseUrl] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -54,7 +53,7 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
 
   const buildCleanedConfig = (): GatewayConfig => {
     const isSim = Boolean(config.isSimulationMode);
-    const cleanUrl = String(config.baseUrl || '').trim() || DEFAULT_GAS_URL;
+    const cleanUrl = String(config.baseUrl || '').trim();
     const cleanKey = sanitizeGatewayToken(config.apiKey, isSim);
     return {
       ...config,
@@ -74,6 +73,15 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
     if (cleaned.isSimulationMode) {
       backendGateway.updateConfig({ status: 'simulated' });
       onClose();
+      return;
+    }
+
+    if (!backendGateway.hasGatewayUrl()) {
+      setTestResult({
+        success: false,
+        message: 'กรุณาวางค่า Gateway URL ในช่อง URL ก่อนเชื่อมต่อ (เก็บเฉพาะใน localStorage)',
+        latencyMs: 0,
+      });
       return;
     }
 
@@ -127,29 +135,6 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
     }
   };
 
-  const handlePresetGAS = () => {
-    setConfig((prev) => {
-      const currentKey = String(prev.apiKey || '').trim();
-      const savedKey = String(backendGateway.getConfig().apiKey || '').trim();
-      const preservedKey =
-        currentKey && !PLACEHOLDER_GATEWAY_TOKENS.has(currentKey)
-          ? currentKey
-          : PLACEHOLDER_GATEWAY_TOKENS.has(currentKey) && savedKey && !PLACEHOLDER_GATEWAY_TOKENS.has(savedKey)
-            ? savedKey
-            : '';
-      return {
-        ...prev,
-        baseUrl: DEFAULT_GAS_URL,
-        webhookEndpoint: '',
-        apiKey: preservedKey,
-        isSimulationMode: false,
-        status: preservedKey || backendGateway.hasGatewayToken() ? 'connected' : 'offline',
-        latencyMs: prev.latencyMs || 18,
-      };
-    });
-    setTestResult(null);
-  };
-
   const handlePresetSimulator = () => {
     setConfig({
       baseUrl: 'https://api.nexusledger.io/v1',
@@ -175,7 +160,7 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
             </div>
             <div>
               <h3 className="text-xl font-bold text-[#14243A] dark:text-white">ตั้งค่า Google Apps Script Gateway</h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400">เชื่อมต่อ Web App เพื่ออัปเดต Manifest และส่งคำสั่งสู่ Drive โดยตรง</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">เชื่อมต่อปลายทางส่วนตัวเพื่ออัปเดต Manifest และส่งคำสั่งสู่ Drive (เก็บเฉพาะในเบราว์เซอร์)</p>
             </div>
           </div>
           <button
@@ -209,7 +194,7 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
                     ...prev,
                     isSimulationMode: nextSim,
                     apiKey: sanitizeGatewayToken(prev.apiKey, nextSim),
-                    baseUrl: !nextSim && prev.baseUrl.includes('nexusledger.io') ? DEFAULT_GAS_URL : prev.baseUrl,
+                    baseUrl: !nextSim && prev.baseUrl.includes('nexusledger.io') ? '' : prev.baseUrl,
                   }));
                   setTestResult(null);
                 }}
@@ -219,16 +204,9 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
             </label>
           </div>
 
-          {/* Quick Presets */}
+          {/* Quick Presets (Zero-Secret: No hardcoded GAS URL) */}
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-slate-500 font-medium">พรีเซ็ตปลายทาง:</span>
-            <button
-              type="button"
-              onClick={handlePresetGAS}
-              className="px-3 py-1.5 rounded-xl bg-blue-100 text-blue-800 border border-blue-200 hover:bg-blue-200 transition cursor-pointer font-bold shadow-2xs"
-            >
-              ★ Google Apps Script ของคุณ (/exec)
-            </button>
+            <span className="text-slate-500 font-medium">โหมดด่วน:</span>
             <button
               type="button"
               onClick={handlePresetSimulator}
@@ -238,22 +216,37 @@ export const BackendGatewayModal: React.FC<BackendGatewayModalProps> = ({
             </button>
           </div>
 
-          {/* Web App URL */}
+          {/* Gateway URL (Stored exclusively in localStorage) */}
           <div className="space-y-1.5">
-            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-              <Globe className="w-4 h-4 text-blue-600 dark:text-teal-400" />
-              <span>Gateway URL (Web App URL ปลายทาง <code className="text-blue-700 dark:text-teal-300 font-mono text-xs">/exec</code>)</span>
+            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1.5">
+                <Globe className="w-4 h-4 text-blue-600 dark:text-teal-400" />
+                <span>Gateway URL (Apps Script Endpoint ส่วนตัว)</span>
+              </span>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                Local Browser Only (localStorage)
+              </span>
             </label>
-            <input
-              type="text"
-              value={config.baseUrl}
-              onChange={(e) => setConfig({ ...config, baseUrl: e.target.value })}
-              onBlur={(e) => setConfig((prev) => ({ ...prev, baseUrl: e.target.value.trim() }))}
-              placeholder="https://script.google.com/macros/s/.../exec"
-              className="w-full px-4 py-3 rounded-2xl bg-white dark:bg-slate-950 border border-blue-200 dark:border-slate-800 text-sm font-mono text-[#14243A] dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-400 shadow-2xs transition-all"
-            />
+            <div className="relative">
+              <input
+                type={showBaseUrl ? 'text' : 'password'}
+                value={config.baseUrl}
+                onChange={(e) => setConfig({ ...config, baseUrl: e.target.value.trim() })}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="วาง Gateway URL ของคุณ (เก็บเฉพาะใน localStorage เครื่องนี้)"
+                className="w-full px-4 py-3 rounded-2xl bg-white dark:bg-slate-950 border border-blue-200 dark:border-slate-800 text-sm font-mono text-[#14243A] dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-400 shadow-2xs transition-all pr-10"
+              />
+              <button
+                type="button"
+                onClick={() => setShowBaseUrl(!showBaseUrl)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                {showBaseUrl ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
             <p className="text-[11px] text-slate-500">
-              ปลายทางบันทึกโฟลเดอร์ Drive: <code className="font-bold text-blue-800 dark:text-teal-300">AI_Project_Workspace</code> | ไฟล์: <code className="font-bold text-blue-800 dark:text-teal-300">00_Project_Manifest.json</code>
+              ปลายทางบันทึกโฟลเดอร์ Drive: <code className="font-bold text-blue-800 dark:text-teal-300">AI_Project_Workspace</code> | ไฟล์: <code className="font-bold text-blue-800 dark:text-teal-300">00_Project_Manifest.json</code> (ไม่ฝัง URL ในโค้ดสาธารณะ)
             </p>
           </div>
 

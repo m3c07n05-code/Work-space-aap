@@ -89,6 +89,12 @@ export const Work4PrintStudio: React.FC<Work4PrintStudioProps> = ({
 
   useEffect(() => {
     fetchStatus();
+    const unsubManifest = backendGateway.onManifestChange(() => {
+      void fetchStatus();
+    });
+    return () => {
+      unsubManifest();
+    };
   }, [selectedYear, selectedMonth]);
 
   // Load preview when category or margins change

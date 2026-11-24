@@ -4,8 +4,11 @@ import {
   Work4PreviewResponse,
   Work4PrintRequest,
   Work4PrintResponse,
-  Work4Category
+  ProjectManifest,
 } from '../types';
+import { backendGateway } from './backendGateway';
+
+const CMS2_ONLINE_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 
 // Default mock payload from OFFLINE DATA CONTRACT specification
 export const DEFAULT_OFFLINE_MOCK_DATA: Work4StatusResponse = {
@@ -45,55 +48,100 @@ export function generateUUID(): string {
   });
 }
 
+export function resolveCms2StatusFromManifest(
+  manifest: ProjectManifest | null,
+  nowMs = Date.now()
+): {
+  isOnline: boolean;
+  ageMin: number | null;
+  statusLabel: string;
+  printGate: string;
+  lastSeenIso: string;
+  hasDevice: boolean;
+} {
+  const devicesMap = manifest?.devices || {};
+  const cms2Key =
+    'CMS-2' in devicesMap
+      ? 'CMS-2'
+      : Object.keys(devicesMap).find((k) => {
+          const entry = devicesMap[k];
+          return (
+            k.toUpperCase().includes('CMS-2') ||
+            String(entry?.deviceId || '').toUpperCase().includes('CMS-2') ||
+            String(entry?.label || '').toUpperCase().includes('CMS-2')
+          );
+        });
+  const cms2 = cms2Key ? devicesMap[cms2Key] : undefined;
+  const lastSeenIso = cms2 ? String(cms2.lastSeenIso || cms2.lastHeartbeatIso || '') : '';
+  const parsedMs = lastSeenIso ? Date.parse(lastSeenIso) : NaN;
+  const ageMs = Number.isFinite(parsedMs) ? Math.max(0, nowMs - parsedMs) : null;
+  const ageMin = ageMs !== null ? Math.round(ageMs / 60000) : null;
+  const isOnline = Boolean(cms2 && ageMs !== null && ageMs <= CMS2_ONLINE_WINDOW_MS);
+
+  return {
+    isOnline,
+    ageMin,
+    statusLabel: String(cms2?.status || (isOnline ? 'ONLINE' : 'OFFLINE')),
+    printGate: String(cms2?.printGate || 'LOCKED_ZERO_PAPER'),
+    lastSeenIso,
+    hasDevice: Boolean(cms2),
+  };
+}
+
 class Work4Service {
   private inFlightPrint = false;
   private currentMode: 'OFFLINE_MOCK' | 'CMS2_LIVE' = 'OFFLINE_MOCK';
+  private manualModeOverride: 'OFFLINE_MOCK' | 'CMS2_LIVE' | null = null;
 
-  // Endpoint 1: Get 9-category status & printer health
+  // Endpoint 1: Resolve 9-category status & CMS-2 health from live Manifest devices["CMS-2"]
   async getStatus(year = '2026', month = '11'): Promise<Work4StatusResponse> {
-    try {
-      const res = await fetch(`/api/work4/status?year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}`);
-      const contentType = res.headers.get('content-type') || '';
-      if (res.ok && contentType.includes('application/json')) {
-        const data = await res.json();
-        this.currentMode = data.mode;
-        return data;
+    let manifest = backendGateway.getManifest();
+    const cfg = backendGateway.getConfig();
+    if (!manifest && !cfg.isSimulationMode && backendGateway.hasGatewayUrl() && backendGateway.hasGatewayToken()) {
+      const res = await backendGateway.readManifest(undefined, { background: true });
+      if (res.manifest) {
+        manifest = res.manifest;
       }
-    } catch {
-      // fallback in pure static mode
     }
 
-    // Static fallback respecting current mode
+    const cms2State = resolveCms2StatusFromManifest(manifest);
+    const resolvedMode: 'OFFLINE_MOCK' | 'CMS2_LIVE' =
+      this.manualModeOverride !== null
+        ? this.manualModeOverride
+        : cms2State.isOnline
+          ? 'CMS2_LIVE'
+          : 'OFFLINE_MOCK';
+
+    this.currentMode = resolvedMode;
+
+    const printerStatus =
+      resolvedMode === 'CMS2_LIVE'
+        ? {
+            host: 'CMS-2 (ONLINE_LIVE)',
+            printer_name: `CMS-2 Worker (${cms2State.printGate})`,
+            is_ready: true,
+            message: cms2State.isOnline
+              ? `CMS-2 ออนไลน์จาก Manifest (Heartbeat ล่าสุด ${cms2State.ageMin ?? 0} นาทีที่แล้ว • ${cms2State.statusLabel})`
+              : 'CMS-2 ออนไลน์ — ระบบ Spooler พร้อมรับงานพิมพ์จริง',
+          }
+        : {
+            ...DEFAULT_OFFLINE_MOCK_DATA.printer_status,
+            message: cms2State.hasDevice
+              ? `CMS-2 ออฟไลน์ — Heartbeat ล่าสุดเมื่อ ${cms2State.ageMin !== null ? `${cms2State.ageMin} นาทีที่แล้ว` : 'ไม่ทราบเวลา'} (เปิดโหมดพรีวิวจำลอง)`
+              : DEFAULT_OFFLINE_MOCK_DATA.printer_status.message,
+          };
+
     return {
       ...DEFAULT_OFFLINE_MOCK_DATA,
-      mode: this.currentMode,
+      mode: resolvedMode,
       selected_year: year,
       selected_month: month,
-      printer_status: this.currentMode === 'CMS2_LIVE' ? {
-        host: "CMS-2 (ONLINE_LIVE)",
-        printer_name: "Brother/HP Laser A6 Feed (Active)",
-        is_ready: true,
-        message: "CMS-2 ออนไลน์ — ระบบ Spooler พร้อมรับงานพิมพ์จริง"
-      } : DEFAULT_OFFLINE_MOCK_DATA.printer_status
+      printer_status: printerStatus,
     };
   }
 
   // Endpoint 2: Generate A6 preview
   async getPreview(params: Work4PreviewRequest): Promise<Work4PreviewResponse> {
-    try {
-      const res = await fetch('/api/work4/preview', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(params),
-      });
-      const contentType = res.headers.get('content-type') || '';
-      if (res.ok && contentType.includes('application/json')) {
-        return await res.json();
-      }
-    } catch {
-      // fallback
-    }
-
     const cat = DEFAULT_OFFLINE_MOCK_DATA.categories.find(c => c.code === params.category_code);
     return {
       status: 'PREVIEW_READY',
@@ -115,55 +163,44 @@ class Work4Service {
 
     this.inFlightPrint = true;
     try {
-      const res = await fetch('/api/work4/print', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(req),
-      });
-      const contentType = res.headers.get('content-type') || '';
-      if (res.ok && contentType.includes('application/json')) {
-        return await res.json();
+      const cms2State = resolveCms2StatusFromManifest(backendGateway.getManifest());
+      const effectiveMode =
+        this.manualModeOverride !== null
+          ? this.manualModeOverride
+          : cms2State.isOnline
+            ? 'CMS2_LIVE'
+            : this.currentMode;
+
+      if (effectiveMode === 'OFFLINE_MOCK') {
+        return {
+          job_id: req.job_id,
+          status: 'BLOCKED_CMS2_OFFLINE',
+          message: 'เครื่อง CMS-2 ออฟไลน์ ไม่สามารถส่งคิวพิมพ์จริงได้'
+        };
       }
-    } catch {
-      // fallback
+
+      return {
+        job_id: req.job_id,
+        status: 'QUEUED',
+        spooler_state: 'SUBMITTED',
+        message: 'ส่งงานพิมพ์เข้า Spooler บนเครื่อง CMS-2 สำเร็จ'
+      };
     } finally {
       setTimeout(() => {
         this.inFlightPrint = false;
       }, 800);
     }
-
-    // Static fallback
-    if (this.currentMode === 'OFFLINE_MOCK') {
-      return {
-        job_id: req.job_id,
-        status: 'BLOCKED_CMS2_OFFLINE',
-        message: 'เครื่อง CMS-2 ออฟไลน์ ไม่สามารถส่งคิวพิมพ์จริงได้'
-      };
-    }
-
-    return {
-      job_id: req.job_id,
-      status: 'QUEUED',
-      spooler_state: 'SUBMITTED',
-      message: 'ส่งงานพิมพ์เข้า Spooler บนเครื่อง CMS-2 สำเร็จ'
-    };
   }
 
   // Toggle Mode for local testing/simulation
   async toggleMode(): Promise<Work4StatusResponse> {
-    try {
-      const res = await fetch('/api/work4/toggle-mode', { method: 'POST' });
-      const contentType = res.headers.get('content-type') || '';
-      if (res.ok && contentType.includes('application/json')) {
-        const data = await res.json();
-        this.currentMode = data.mode;
-        return data;
-      }
-    } catch {
-      // toggle locally
-    }
-    this.currentMode = this.currentMode === 'OFFLINE_MOCK' ? 'CMS2_LIVE' : 'OFFLINE_MOCK';
+    this.manualModeOverride = this.currentMode === 'OFFLINE_MOCK' ? 'CMS2_LIVE' : 'OFFLINE_MOCK';
+    this.currentMode = this.manualModeOverride;
     return this.getStatus();
+  }
+
+  clearManualOverride(): void {
+    this.manualModeOverride = null;
   }
 
   getCurrentMode(): 'OFFLINE_MOCK' | 'CMS2_LIVE' {

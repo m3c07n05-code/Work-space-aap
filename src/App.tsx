@@ -53,12 +53,45 @@ export default function App() {
   );
 
   useEffect(() => {
-    // Fetch live modules from 00_Project_Manifest.json via backendGateway
-    backendGateway.readManifest().then((res) => {
-      if (res.success && res.manifest?.modules) {
-        setManifestModules(res.manifest.modules);
+    const MANIFEST_REFRESH_INTERVAL_MS = 60_000;
+    let isRefreshing = false;
+
+    const refreshManifestIfReady = async (background: boolean) => {
+      if (isRefreshing) return;
+      const cfg = backendGateway.getConfig();
+      if (cfg.isSimulationMode || !backendGateway.hasGatewayUrl() || !backendGateway.hasGatewayToken()) {
+        return;
       }
-    });
+      isRefreshing = true;
+      try {
+        const res = await backendGateway.readManifest(undefined, { background });
+        if (res.success && res.manifest?.modules) {
+          setManifestModules(res.manifest.modules);
+        }
+      } finally {
+        isRefreshing = false;
+      }
+    };
+
+    // Initial live fetch from 00_Project_Manifest.json if local browser config is ready
+    void refreshManifestIfReady(false);
+
+    // Periodic auto-refresh every 60s while tab is visible so CMS-2 status never goes stale (>5m)
+    const refreshTimer = setInterval(() => {
+      if (typeof document === 'undefined' || !document.hidden) {
+        void refreshManifestIfReady(true);
+      }
+    }, MANIFEST_REFRESH_INTERVAL_MS);
+
+    const handleVisibilityChange = () => {
+      if (typeof document !== 'undefined' && !document.hidden) {
+        void refreshManifestIfReady(true);
+      }
+    };
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+    }
 
     const unsubConfig = backendGateway.onConfigChange((newConfig) => {
       setConfig(newConfig);
@@ -75,6 +108,10 @@ export default function App() {
       }
     });
     return () => {
+      clearInterval(refreshTimer);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
       unsubConfig();
       unsubLogs();
       unsubScopes();

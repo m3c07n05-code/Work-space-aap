@@ -367,7 +367,7 @@ export const BentoGrid: React.FC<BentoGridProps> = ({ onOpenLogsDrawer }) => {
                   <span className="text-emerald-400">STATUS: CONNECTED</span>
                 </div>
                 <div className="text-teal-300 truncate">
-                  POST https://script.google.com/macros/s/.../exec
+                  POST &lt;Local Browser Gateway URL&gt;
                 </div>
                 <div className="text-slate-400">
                   X-Target-Manifest: <span className="text-white">00_Project_Manifest.json</span>
