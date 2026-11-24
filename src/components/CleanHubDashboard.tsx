@@ -12,6 +12,7 @@ import {
 import { GatewayConfig } from '../types';
 import { LiquidButton } from './ui/liquid-glass-button';
 import { GlassBox } from './ui/glass-box';
+import { CrdLiveOperationsPanel } from './CrdLiveOperationsPanel';
 
 interface CleanHubDashboardProps {
   config: GatewayConfig;
@@ -147,6 +148,9 @@ export const CleanHubDashboard: React.FC<CleanHubDashboardProps> = ({
           </GlassBox>
         ))}
       </div>
+
+      {/* Live Operations Dispatch Panel (WORK 1 / 2 / 4 / 6 + AppSheet) */}
+      <CrdLiveOperationsPanel />
 
       {/* Compact Safety Footer Pill */}
       <div className="flex items-center justify-between px-4 py-3 rounded-2xl bg-white/75 dark:bg-slate-900/70 border border-slate-200/70 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400">

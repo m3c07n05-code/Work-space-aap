@@ -20,10 +20,10 @@ import { AICommandDispatcher } from './components/AICommandDispatcher';
 import { Work4PrintStudio } from './components/Work4PrintStudio';
 import { Work1AndBackupStudio } from './components/Work1AndBackupStudio';
 import { UnifiedControlFlowStudio } from './components/UnifiedControlFlowStudio';
+import { LiquidNavbar, NimbusIcons, LiquidNavItem } from './components/ui/liquid-glass-navbar';
 
 import { backendGateway } from './services/backendGateway';
 import { GatewayConfig, ManifestModule } from './types';
-import { Home, FileSpreadsheet, Printer, Layers, Settings } from 'lucide-react';
 
 export type ActiveTabType =
   | 'overview'
@@ -120,19 +120,56 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
   }, [activeTab]);
 
-  // Native iOS 5-Tab Bottom Bar for iPhone 15 Pro Max (Front Office + Back Office)
-  const bottomTabs: { id: ActiveTabType; label: string; icon: React.ReactNode; matchTabs: ActiveTabType[] }[] = [
-    { id: 'overview', label: 'หน้าหลัก', icon: <Home className="w-5 h-5" />, matchTabs: ['overview', 'control-flow'] },
-    { id: 'work1', label: 'WORK 1', icon: <FileSpreadsheet className="w-5 h-5" />, matchTabs: ['work1'] },
-    { id: 'work4', label: 'พิมพ์จดหมาย', icon: <Printer className="w-5 h-5" />, matchTabs: ['work4'] },
-    { id: 'proposed-work', label: 'WORK 1–9', icon: <Layers className="w-5 h-5" />, matchTabs: ['proposed-work'] },
-    {
-      id: 'admin-hub',
-      label: 'หลังบ้าน',
-      icon: <Settings className="w-5 h-5" />,
-      matchTabs: ['admin-hub', 'scope-builder', 'stop-gates', 'ai-studio', 'gascode'],
-    },
+  // Original Liquid Glass Navbar (Zero Watermark) mapped cleanly to Front Office + Back Office
+  const navItems: LiquidNavItem[] = [
+    { label: 'หน้าหลัก', icon: NimbusIcons.home, fx: 'glow' },
+    { label: 'WORK 1', icon: NimbusIcons.globe, fx: 'spin' },
+    { label: 'พิมพ์จดหมาย', icon: NimbusIcons.plane, fx: 'plane' },
+    { label: 'WORK 1–9', icon: NimbusIcons.drop, fx: 'drop' },
+    { label: 'หลังบ้าน', icon: NimbusIcons.user, fx: 'wave' },
   ];
+
+  const getNavbarIndex = (): number => {
+    switch (activeTab) {
+      case 'overview':
+      case 'control-flow':
+        return 0;
+      case 'work1':
+        return 1;
+      case 'work4':
+        return 2;
+      case 'proposed-work':
+        return 3;
+      case 'admin-hub':
+      case 'scope-builder':
+      case 'stop-gates':
+      case 'ai-studio':
+      case 'gascode':
+        return 4;
+      default:
+        return 0;
+    }
+  };
+
+  const handleNavbarChange = (index: number) => {
+    switch (index) {
+      case 0:
+        setActiveTab('overview');
+        break;
+      case 1:
+        setActiveTab('work1');
+        break;
+      case 2:
+        setActiveTab('work4');
+        break;
+      case 3:
+        setActiveTab('proposed-work');
+        break;
+      case 4:
+        setActiveTab('admin-hub');
+        break;
+    }
+  };
 
   const livePayloadCount = manifestModules.length > 0 ? manifestModules.length : logCount;
 
@@ -241,35 +278,19 @@ export default function App() {
         )}
       </main>
 
-      {/* Native iOS Bottom Tab Bar (z-50, Safe Area for iPhone 15 Pro Max — Zero Watermark) */}
+      {/* Original Frosted Liquid Glass Bottom Dock (iPhone 15 Pro Max Safe Area — Zero Watermark) */}
       <nav
         aria-label="เมนูหลักด้านล่าง"
-        className="fixed bottom-0 inset-x-0 z-50 safe-bottom pt-2 px-2 bg-white/85 dark:bg-[#0b1120]/90 backdrop-blur-2xl border-t border-slate-200/80 dark:border-slate-800/80 shadow-[0_-6px_24px_rgba(0,0,0,0.04)]"
+        className="fixed bottom-0 inset-x-0 z-50 safe-bottom pt-2 px-3 bg-white/75 dark:bg-slate-900/85 backdrop-blur-2xl border-t border-slate-200/60 dark:border-slate-800/80 flex items-center justify-center shadow-[0_-8px_30px_rgba(0,0,0,0.04)]"
       >
-        <div className="max-w-lg mx-auto grid grid-cols-5 gap-1">
-          {bottomTabs.map((tab) => {
-            const isActive = tab.matchTabs.includes(activeTab);
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveTab(tab.id)}
-                className={`touch-target flex flex-col items-center justify-center gap-0.5 rounded-2xl py-1.5 px-1 transition-all cursor-pointer select-none ${
-                  isActive
-                    ? 'text-blue-700 dark:text-teal-300 bg-blue-50/90 dark:bg-teal-500/15 font-bold'
-                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 font-medium'
-                }`}
-              >
-                <span className={`transition-transform ${isActive ? 'scale-105' : ''}`}>
-                  {tab.icon}
-                </span>
-                <span className="text-[11px] leading-tight tracking-tight truncate max-w-full">
-                  {tab.label}
-                </span>
-              </button>
-            );
-          })}
-        </div>
+        <LiquidNavbar
+          items={navItems}
+          active={getNavbarIndex()}
+          onChange={(idx) => handleNavbarChange(idx)}
+          tone={theme === 'dark' ? 'dark' : 'light'}
+          compact={true}
+          sound={true}
+        />
       </nav>
 
       {/* Modals */}
