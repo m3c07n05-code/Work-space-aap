@@ -108,6 +108,26 @@ def generate_a6_pdf_file(filepath, cat, year="2026", month="11", margin_top_mm=0
     return len(buf.getvalue())
 
 
+def _resolve_default_win_output_dir() -> str:
+    onedrive = os.environ.get("OneDrive") or os.environ.get("OneDriveCommercial") or os.path.join(os.path.expanduser("~"), "OneDrive")
+    return os.path.join(onedrive, "CRD PROJECT", "WORK_4_OUTPUT", "01_ใบฟ้า_A6")
+
+
+def _assert_safe_output_dir(target_dir: str) -> None:
+    abs_target = os.path.abspath(target_dir).rstrip("\\/").lower()
+    protected = [
+        r"D:\COOP\VIEWREPORT",
+        os.path.join(os.path.expanduser("~"), "OneDrive", "CRD PROJECT", "00_MASTER_SOURCE_งานผู้จัดการ_รอตรวจสอบ"),
+        os.path.join(os.path.expanduser("~"), "Desktop", "งานผู้จัดการ"),
+        r"S:\2026",
+        r"S:\@ฝ่ายสมาชิกสัมพันธ์\2026",
+    ]
+    for pfx in protected:
+        norm = os.path.abspath(pfx).rstrip("\\/").lower()
+        if abs_target == norm or abs_target.startswith(norm + os.sep):
+            raise PermissionError(f"READ-ONLY GUARDRAIL VIOLATION: Writing to protected corporate source is forbidden: {target_dir}")
+
+
 def execute_pipeline(year="2026", month="11", output_dir=None):
     """
     Executes the 9-category scan and PDF generation.
@@ -116,12 +136,13 @@ def execute_pipeline(year="2026", month="11", output_dir=None):
     if sys.platform == "win32":
         source_dir = r"D:\COOP\VIEWREPORT\หนังสือบอกกล่าวการชำระหนี้_CLT"
         if not output_dir:
-            output_dir = r"D:\OneDrive\2026\ระบบจดหมาย\2-4-5 งวด"
+            output_dir = _resolve_default_win_output_dir()
     else:
         source_dir = r"D:\COOP\VIEWREPORT\หนังสือบอกกล่าวการชำระหนี้_CLT (Simulated on Cloud)"
         if not output_dir:
-            output_dir = os.path.join(os.getcwd(), "output", "OneDrive_2026", "ระบบจดหมาย", "2-4-5 งวด")
+            output_dir = os.path.join(os.getcwd(), "output", "WORK_4_OUTPUT", "01_ใบฟ้า_A6")
 
+    _assert_safe_output_dir(output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
     results = []

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     CRD Automated Split Monthly Follow-up & Payment History Integration (Follower 077)
     Enforces Day 20 Cut-off Rule & Zero-PII Compliance.
@@ -173,7 +173,30 @@ if ($Step -eq 1) {
 # =========================================================================
 Write-Host "`n[STEP 2] Creating $TargetFolderName & Extracting Split Workbooks..." -ForegroundColor Yellow
 
+# Read-Only Corporate Source Boundary Guard: never write outputs into protected sources
+$ProtectedPrefixes = @(
+    'D:\COOP\VIEWREPORT',
+    (Join-Path $env:USERPROFILE 'OneDrive\CRD PROJECT\00_MASTER_SOURCE_งานผู้จัดการ_รอตรวจสอบ'),
+    (Join-Path $env:USERPROFILE 'Desktop\งานผู้จัดการ'),
+    'S:\2026',
+    'S:\@ฝ่ายสมาชิกสัมพันธ์\2026'
+)
 $TargetDir = Join-Path $SourceDir $TargetFolderName
+$normTarget = [System.IO.Path]::GetFullPath($TargetDir).TrimEnd('\').ToLowerInvariant()
+foreach ($pfx in $ProtectedPrefixes) {
+    if ([string]::IsNullOrWhiteSpace($pfx)) { continue }
+    $normPfx = [System.IO.Path]::GetFullPath($pfx).TrimEnd('\').ToLowerInvariant()
+    if ($normTarget -eq $normPfx -or $normTarget.StartsWith($normPfx + '\')) {
+        $safeOneDrive = if ($env:OneDrive -and (Test-Path -LiteralPath (Join-Path $env:OneDrive 'CRD PROJECT'))) {
+            Join-Path $env:OneDrive 'CRD PROJECT'
+        } else {
+            Join-Path $env:USERPROFILE 'OneDrive\CRD PROJECT'
+        }
+        $TargetDir = Join-Path (Join-Path $safeOneDrive 'WORK_4_OUTPUT') $TargetFolderName
+        Write-Warning "Read-Only corporate source boundary enforced: redirected output to $TargetDir"
+        break
+    }
+}
 if (-not (Test-Path $TargetDir)) {
     New-Item -ItemType Directory -Path $TargetDir -Force | Out-Null
     Write-Host "Created target folder: $TargetDir" -ForegroundColor Green

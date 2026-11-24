@@ -26,6 +26,18 @@ RUNTIME_DIR = os.path.join(BASE_DIR, "runtime")
 STATE_FILE = os.path.join(RUNTIME_DIR, "crd_watcher_state.json")
 LOCK_FILE = os.path.join(RUNTIME_DIR, "crd_watcher.lock")
 LOG_FILE = os.path.join(RUNTIME_DIR, "crd_watcher.log")
+WORKSPACE_DIR_DEFAULT = r"C:\Users\Natee.yan\OneDrive\CRD PROJECT"
+KILL_SWITCH_FILES = [
+    os.path.join(WORKSPACE_DIR_DEFAULT, "STOP_AUTO_RUN.flag"),
+    os.path.join(RUNTIME_DIR, "STOP_AUTO_RUN.flag"),
+]
+
+
+def get_active_kill_switch():
+    for path in KILL_SWITCH_FILES:
+        if os.path.exists(path):
+            return path
+    return None
 
 
 def log_msg(msg: str):
@@ -116,27 +128,43 @@ def fetch_doc_content() -> str:
         return ""
 
 
+def normalize_task_id(raw_id: str, fallback_hash: str = "") -> str:
+    cleaned = (raw_id or "").strip().replace("\\_", "_").replace("\\-", "-").replace("\\", "")
+    cleaned = cleaned.strip("*`\"'[]()| ,.;:")
+    m = re.match(r'^([A-Za-z0-9][A-Za-z0-9_\-\.]{1,119})', cleaned)
+    if m:
+        return m.group(1)
+    return f"DOCB-{fallback_hash[:8]}" if fallback_hash else "DOCB-ACTIVE-DISPATCH"
+
+
 def parse_ready_tasks(content: str):
     """
     Scans for active dispatch blocks (READY FOR AGENT EXECUTION / EXECUTE IMMEDIATELY / EXECUTE ALL STAGES / EXECUTE DIRECTLY).
-    Returns structured list of pending tasks.
+    Returns structured list of pending tasks with normalized TASK_ID parsing (CRD-... / DOCB-...).
     """
     tasks = []
     blocks = re.split(r'\n(?=##\s+|\s*\\?\[[A-Z0-9_\-\s\|]+)', content)
     for b in blocks:
-        if "EXECUTION REPORT" in b[:200] or "PERMANENT SYSTEM GUARDRAILS" in b[:200]:
+        b_upper = b.upper()
+        first_line = b.strip().split("\n")[0].strip().upper()
+        if "EXECUTION REPORT" in b_upper or "PERMANENT SYSTEM GUARDRAILS" in b_upper:
             continue
-        if re.search(r'(READY FOR AGENT EXECUTION|EXECUTE IMMEDIATELY|EXECUTE ALL STAGES|EXECUTE DIRECTLY|ACTIVE TASK)', b, re.IGNORECASE):
-            if re.search(r'STATUS\s*:\s*(COMPLETED|DONE|PAUSED|BLOCKED|CANCELLED)', b, re.IGNORECASE):
+        if "CRD WORK CARD" in first_line and "DISPATCH" not in first_line:
+            continue
+        report_markers = ("🔵 ถึงไหนแล้ว", "✅ เสร็จแล้ว", "🟠 ติดอะไร", "➡️ ขั้นต่อไป", "📎 ลิงก์หลักฐาน")
+        if sum(1 for m in report_markers if m in b) >= 2:
+            continue
+        if re.search(r'(READY FOR AGENT EXECUTION|SCRIPT-FIRST FIX|CRD SCRIPT-FIRST DISPATCH|CRD UNIFIED|EXECUTE IMMEDIATELY|EXECUTE ALL STAGES|EXECUTE DIRECTLY|ACTIVE TASK|UNIFIED ALL-IN-ONE EXECUTION RUNBOOK)', b, re.IGNORECASE):
+            status_m = re.search(r'(?:\*{1,2})?STATUS(?:\*{1,2})?\s*:\s*(?:\*{1,2})?\s*([^\r\n|]+)', b, re.IGNORECASE)
+            status_val = status_m.group(1).replace("\\_", "_").replace("\\", "").strip("*` ").strip() if status_m else "ACTIVE_DISPATCH"
+            if status_m and re.search(r'\b(COMPLETED|DONE|PAUSED|BLOCKED|AUTH_CHECKPOINT|CANCELLED|IN_PROGRESS|PARTIAL|FAILED)\b', status_val, re.IGNORECASE):
                 continue
-            task_id_m = re.search(r'TASK\\?_ID:\s*([A-Za-z0-9_\-]+)', b)
-            task_id = task_id_m.group(1).replace('\\', '') if task_id_m else "DOCB-ACTIVE-DISPATCH"
+            block_hash = hashlib.sha256(b.strip().encode("utf-8")).hexdigest()
+            task_id_m = re.search(r'(?:\*{1,2}|`)?TASK\\?_ID(?:\*{1,2}|`)?\s*:\s*(?:\*{1,2}|`)?\s*((?:\\_|[A-Za-z0-9_\-\.])+)', b, re.IGNORECASE)
+            task_id = normalize_task_id(task_id_m.group(1), fallback_hash=block_hash) if task_id_m else f"DOCB-{block_hash[:8]}"
             
-            header_m = re.search(r'\\?\[([A-Z0-9_\-\s\|:—\.\(\)\/]+)\\?\]', b)
-            title = header_m.group(1).strip() if header_m else "Task Command"
-
-            status_m = re.search(r'STATUS:\s*([^\r\n]+)', b)
-            status_val = status_m.group(1).strip() if status_m else "ACTIVE_DISPATCH"
+            header_m = re.search(r'\\?\[([^\[\]\r\n]+?)\\?\]', b)
+            title = header_m.group(1).rstrip('\\').strip() if header_m else "Task Command"
 
             tasks.append({
                 "task_id": task_id,
@@ -149,6 +177,10 @@ def parse_ready_tasks(content: str):
 
 def run_cycle():
     """Runs a single 10-minute check cycle."""
+    kill_path = get_active_kill_switch()
+    if kill_path:
+        log_msg(f"Paused by kill-switch ({kill_path}); skipping 10-minute inspection cycle.")
+        return {"status": "PAUSED_BY_KILL_SWITCH", "kill_switch_file": kill_path}
     if not acquire_lock():
         return {"status": "SKIPPED_LOCKED"}
 
