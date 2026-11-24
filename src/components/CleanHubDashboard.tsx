@@ -4,6 +4,7 @@ import {
   Printer,
   Layers,
   Activity,
+  Bot,
   ChevronRight,
   Settings,
   CheckCircle2,
@@ -23,6 +24,8 @@ interface CleanHubDashboardProps {
       | 'control-flow'
       | 'work1'
       | 'work4'
+      | 'ai-chat'
+      | '3d-view'
       | 'ai-studio'
       | 'scope-builder'
       | 'stop-gates'
@@ -75,6 +78,15 @@ export const CleanHubDashboard: React.FC<CleanHubDashboardProps> = ({
       badge: 'Live Flow',
       icon: <Activity className="w-6 h-6 text-sky-600 dark:text-sky-400" />,
       actionText: 'เปิดศูนย์สั่งการ',
+      highlight: false,
+    },
+    {
+      id: 'ai-chat' as const,
+      title: 'ผู้ช่วย Gemini AI แชท CRD',
+      desc: 'ถาม-ตอบกฎระเบียบ WORK 1–9 และแปลงคำตอบเป็นขอบเขตงานได้ทันที',
+      badge: 'AI Chat',
+      icon: <Bot className="w-6 h-6 text-violet-600 dark:text-violet-400" />,
+      actionText: 'เปิดผู้ช่วย AI แชท',
       highlight: false,
     },
   ];

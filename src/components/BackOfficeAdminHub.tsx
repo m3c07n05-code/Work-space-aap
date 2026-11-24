@@ -6,6 +6,7 @@ import {
   Terminal,
   PlusCircle,
   Sparkles,
+  Box,
   Download,
   ChevronRight,
   Server,
@@ -21,7 +22,7 @@ interface BackOfficeAdminHubProps {
   logCount: number;
   livePayloadCount: number;
   onNavigate: (
-    view: 'scope-builder' | 'stop-gates' | 'ai-studio' | 'gascode'
+    view: 'scope-builder' | 'stop-gates' | 'ai-studio' | '3d-view' | 'gascode'
   ) => void;
   onOpenGatewayModal: () => void;
   onOpenLogsModal: () => void;
@@ -78,6 +79,14 @@ export const BackOfficeAdminHub: React.FC<BackOfficeAdminHubProps> = ({
       badge: 'Code.gs',
       icon: <Code2 className="w-5 h-5 text-amber-600 dark:text-amber-400" />,
       onClick: () => onNavigate('gascode'),
+    },
+    {
+      id: '3d-view',
+      title: 'สถาปัตยกรรม CRD 3 มิติ (Three.js)',
+      desc: 'สำรวจแกนกลาง Dual-Key Ledger สายงาน WORK 1–9 และวงแหวน 16 ด่านแบบ 3 มิติ',
+      badge: '3D Map',
+      icon: <Box className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />,
+      onClick: () => onNavigate('3d-view'),
     },
   ];
 

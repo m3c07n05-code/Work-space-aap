@@ -20,6 +20,8 @@ import { AICommandDispatcher } from './components/AICommandDispatcher';
 import { Work4PrintStudio } from './components/Work4PrintStudio';
 import { Work1AndBackupStudio } from './components/Work1AndBackupStudio';
 import { UnifiedControlFlowStudio } from './components/UnifiedControlFlowStudio';
+import { GeminiChatbotView } from './components/GeminiChatbotView';
+import { CrdArchitecture3DView } from './components/CrdArchitecture3DView';
 import { LiquidNavbar, NimbusIcons, LiquidNavItem } from './components/ui/liquid-glass-navbar';
 
 import { backendGateway } from './services/backendGateway';
@@ -30,6 +32,8 @@ export type ActiveTabType =
   | 'control-flow'
   | 'work1'
   | 'work4'
+  | 'ai-chat'
+  | '3d-view'
   | 'proposed-work'
   | 'admin-hub'
   | 'scope-builder'
@@ -120,12 +124,12 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
   }, [activeTab]);
 
-  // Original Liquid Glass Navbar (Zero Watermark) mapped cleanly to Front Office + Back Office
+  // Original Liquid Glass Navbar (Zero Watermark) — 5 main pillars: Hub / WORK 1–9 / AI Chat / 3D / Back Office
   const navItems: LiquidNavItem[] = [
     { label: 'หน้าหลัก', icon: NimbusIcons.home, fx: 'glow' },
-    { label: 'WORK 1', icon: NimbusIcons.globe, fx: 'spin' },
-    { label: 'พิมพ์จดหมาย', icon: NimbusIcons.plane, fx: 'plane' },
-    { label: 'WORK 1–9', icon: NimbusIcons.drop, fx: 'drop' },
+    { label: 'WORK 1–9', icon: NimbusIcons.globe, fx: 'spin' },
+    { label: 'AI แชท', icon: NimbusIcons.plane, fx: 'plane' },
+    { label: 'พิมพ์จดหมาย', icon: NimbusIcons.drop, fx: 'drop' },
     { label: 'หลังบ้าน', icon: NimbusIcons.user, fx: 'wave' },
   ];
 
@@ -135,15 +139,17 @@ export default function App() {
       case 'control-flow':
         return 0;
       case 'work1':
-        return 1;
-      case 'work4':
-        return 2;
       case 'proposed-work':
+        return 1;
+      case 'ai-chat':
+        return 2;
+      case 'work4':
         return 3;
       case 'admin-hub':
       case 'scope-builder':
       case 'stop-gates':
       case 'ai-studio':
+      case '3d-view':
       case 'gascode':
         return 4;
       default:
@@ -157,13 +163,13 @@ export default function App() {
         setActiveTab('overview');
         break;
       case 1:
-        setActiveTab('work1');
+        setActiveTab('proposed-work');
         break;
       case 2:
-        setActiveTab('work4');
+        setActiveTab('ai-chat');
         break;
       case 3:
-        setActiveTab('proposed-work');
+        setActiveTab('work4');
         break;
       case 4:
         setActiveTab('admin-hub');
@@ -230,6 +236,18 @@ export default function App() {
 
         {activeTab === 'work4' && (
           <Work4PrintStudio onBack={() => setActiveTab('overview')} theme={theme} />
+        )}
+
+        {activeTab === 'ai-chat' && (
+          <div className="space-y-5 animate-fade-in">
+            <GeminiChatbotView />
+          </div>
+        )}
+
+        {activeTab === '3d-view' && (
+          <div className="space-y-5 animate-fade-in">
+            <CrdArchitecture3DView />
+          </div>
         )}
 
         {activeTab === 'proposed-work' && (
