@@ -42,14 +42,15 @@ interface CleanHubDashboardProps {
 export const CleanHubDashboard: React.FC<CleanHubDashboardProps> = ({
   onNavigate,
 }) => {
-  // หน้าบ้าน (Front Office): เฉพาะงานปฏิบัติการจริงที่ใช้งานประจำวัน ไม่ปนโค้ดหรือเครื่องมือหลังบ้าน
+  // หน้าบ้าน (Front Office): เฉพาะงานปฏิบัติการจริงพร้อมภาพการ์ตูน 3D Station ต้นฉบับ
   const frontCards = [
     {
       id: 'work1' as const,
       title: 'WORK 1: พ้นสมาชิกภาพ (A–M ล็อก 100%)',
       desc: 'ตาราง 13 คอลัมน์มาตรฐาน แยก พม. เดี่ยว/สัญญาอื่น และสำรองข้อมูล Drive',
       badge: 'WORK 1',
-      icon: <FileSpreadsheet className="w-6 h-6 text-blue-600 dark:text-teal-400" />,
+      image: '/assets/work-stations/work1.jpg',
+      icon: <FileSpreadsheet className="w-5 h-5 text-blue-600 dark:text-teal-400" />,
       actionText: 'เปิดงาน WORK 1',
       highlight: true,
     },
@@ -58,7 +59,8 @@ export const CleanHubDashboard: React.FC<CleanHubDashboardProps> = ({
       title: 'WORK 4: พิมพ์จดหมาย 9 หมวด & EMS A6',
       desc: 'ตรวจชุดพิมพ์จดหมายบอกกล่าว ใบนำส่ง A4 และใบฟ้า EMS แบบ Read-Only 100%',
       badge: 'WORK 4',
-      icon: <Printer className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />,
+      image: '/assets/work-stations/work4.jpg',
+      icon: <Printer className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />,
       actionText: 'เปิดห้องพิมพ์ WORK 4',
       highlight: false,
     },
@@ -67,7 +69,8 @@ export const CleanHubDashboard: React.FC<CleanHubDashboardProps> = ({
       title: 'ศูนย์ปฏิบัติการสายงาน WORK 1–9',
       desc: 'เข้าถึงทุกสายงานปฏิบัติการ CRD ครบทั้ง 9 สายงานในที่เดียว',
       badge: '9 สายงาน',
-      icon: <Layers className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />,
+      image: '/assets/work-stations/work2.jpg',
+      icon: <Layers className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />,
       actionText: 'ดูสายงาน WORK 1–9',
       highlight: false,
     },
@@ -76,7 +79,8 @@ export const CleanHubDashboard: React.FC<CleanHubDashboardProps> = ({
       title: 'ศูนย์สั่งการและตรวจสถานะงาน (Control Flow)',
       desc: 'ตรวจสถานะระบบ ดึงงาน รันสคริปต์ และเชื่อมเครื่องมือปฏิบัติการ',
       badge: 'Live Flow',
-      icon: <Activity className="w-6 h-6 text-sky-600 dark:text-sky-400" />,
+      image: '/assets/work-stations/work8.jpg',
+      icon: <Activity className="w-5 h-5 text-sky-600 dark:text-sky-400" />,
       actionText: 'เปิดศูนย์สั่งการ',
       highlight: false,
     },
@@ -85,7 +89,8 @@ export const CleanHubDashboard: React.FC<CleanHubDashboardProps> = ({
       title: 'ผู้ช่วย Gemini AI แชท CRD',
       desc: 'ถาม-ตอบกฎระเบียบ WORK 1–9 และแปลงคำตอบเป็นขอบเขตงานได้ทันที',
       badge: 'AI Chat',
-      icon: <Bot className="w-6 h-6 text-violet-600 dark:text-violet-400" />,
+      image: '/assets/work-stations/work3.jpg',
+      icon: <Bot className="w-5 h-5 text-violet-600 dark:text-violet-400" />,
       actionText: 'เปิดผู้ช่วย AI แชท',
       highlight: false,
     },
@@ -125,26 +130,33 @@ export const CleanHubDashboard: React.FC<CleanHubDashboardProps> = ({
             variant="default"
             interactive={true}
             onClick={() => onNavigate(card.id)}
-            className="group"
+            className="group overflow-hidden"
           >
-            <div className="p-5 flex flex-col justify-between space-y-4 h-full">
-              <div className="space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="w-12 h-12 rounded-2xl flex items-center justify-center bg-slate-100/90 dark:bg-slate-900 border border-white dark:border-slate-800 shadow-2xs">
-                    {card.icon}
-                  </div>
-                  <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-white/90 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200/80 dark:border-slate-700">
-                    {card.badge}
-                  </span>
-                </div>
-                <div className="space-y-1">
-                  <h2 className="text-base font-bold text-[#14243A] dark:text-white group-hover:text-blue-700 dark:group-hover:text-teal-300 transition-colors">
-                    {card.title}
-                  </h2>
-                  <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                    {card.desc}
-                  </p>
-                </div>
+            {/* 3D Cartoon Station Illustration Banner */}
+            <div className="relative h-36 sm:h-40 w-full overflow-hidden bg-slate-900">
+              <img
+                src={card.image}
+                alt={card.title}
+                loading="lazy"
+                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-slate-950/65 via-slate-950/15 to-transparent" />
+              <div className="absolute top-3 left-3 w-10 h-10 rounded-xl flex items-center justify-center bg-white/90 dark:bg-slate-900/90 border border-white/80 dark:border-slate-700 shadow-sm backdrop-blur-md">
+                {card.icon}
+              </div>
+              <span className="absolute top-3 right-3 px-2.5 py-1 rounded-full text-[11px] font-bold bg-white/90 dark:bg-slate-900/90 text-slate-800 dark:text-slate-100 border border-white/80 dark:border-slate-700 backdrop-blur-md shadow-sm">
+                {card.badge}
+              </span>
+            </div>
+
+            <div className="p-5 flex flex-col justify-between space-y-4">
+              <div className="space-y-1.5">
+                <h2 className="text-base font-bold text-[#14243A] dark:text-white group-hover:text-blue-700 dark:group-hover:text-teal-300 transition-colors">
+                  {card.title}
+                </h2>
+                <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                  {card.desc}
+                </p>
               </div>
 
               <LiquidButton
