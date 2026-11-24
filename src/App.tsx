@@ -29,6 +29,7 @@ import { GatewayConfig, ManifestModule } from './types';
 
 export type ActiveTabType =
   | 'overview'
+  | 'full-crd'
   | 'control-flow'
   | 'work1'
   | 'work4'
@@ -249,6 +250,31 @@ export default function App() {
             theme={theme}
             viewMode={viewMode}
           />
+        )}
+
+        {activeTab === 'full-crd' && (
+          <div className="w-full space-y-3">
+            <div className="flex items-center justify-between gap-2 px-1">
+              <span className="text-xs font-bold text-blue-700 dark:text-teal-300">
+                เว็บต้นฉบับเต็มรูปแบบ (Nexora CRD Center — ปุ่มทุกปุ่มทำงานได้จริง 100%)
+              </span>
+              <a
+                href="/full-crd/index.html"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-1.5 rounded-full text-xs font-bold bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+              >
+                เปิดเต็มจอ ↗
+              </a>
+            </div>
+            <div className="w-full h-[calc(100dvh-11.5rem)] rounded-3xl overflow-hidden border border-slate-200/80 dark:border-slate-800 shadow-lg bg-white">
+              <iframe
+                src="/full-crd/index.html"
+                title="Nexora CRD Center Full Version"
+                className="w-full h-full border-0"
+              />
+            </div>
+          </div>
         )}
 
         {activeTab === 'control-flow' && (

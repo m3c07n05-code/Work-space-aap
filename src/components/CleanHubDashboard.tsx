@@ -21,6 +21,7 @@ interface CleanHubDashboardProps {
   logCount: number;
   onNavigate: (
     view:
+      | 'full-crd'
       | 'control-flow'
       | 'work1'
       | 'work4'
@@ -44,8 +45,18 @@ export const CleanHubDashboard: React.FC<CleanHubDashboardProps> = ({
   onNavigate,
   viewMode = 'iphone',
 }) => {
-  // หน้าบ้าน (Front Office): เฉพาะงานปฏิบัติการจริงพร้อมภาพการ์ตูน 3D Station ต้นฉบับ
+  // หน้าบ้าน (Front Office): รวมเว็บต้นฉบับเต็มรูปแบบ (ยกมาทั้งดุ้น) + สายงานหลัก
   const frontCards = [
+    {
+      id: 'full-crd' as const,
+      title: 'เข้าสู่หน้าเว็บ CRD ต้นฉบับเต็มรูปแบบ (Nexora Full)',
+      desc: 'ยกมาทั้งชุดครบทุกปุ่ม ทุกหน้าต่างจำลอง WORK 1–9 แดชบอร์ดวิเคราะห์ และภาพการ์ตูน 9 ด่าน (ใช้งานได้จริง 100%)',
+      badge: 'Full Original',
+      image: '/assets/work-stations/work5.jpg',
+      icon: <Layers className="w-5 h-5 text-blue-600 dark:text-teal-400" />,
+      actionText: 'เข้าสู่หน้าเว็บต้นฉบับทั้งชุด',
+      highlight: true,
+    },
     {
       id: 'work1' as const,
       title: 'WORK 1: พ้นสมาชิกภาพ (A–M ล็อก 100%)',
@@ -54,7 +65,7 @@ export const CleanHubDashboard: React.FC<CleanHubDashboardProps> = ({
       image: '/assets/work-stations/work1.jpg',
       icon: <FileSpreadsheet className="w-5 h-5 text-blue-600 dark:text-teal-400" />,
       actionText: 'เปิดงาน WORK 1',
-      highlight: true,
+      highlight: false,
     },
     {
       id: 'work4' as const,
