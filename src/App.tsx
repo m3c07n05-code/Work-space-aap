@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { GoogleAITopbar } from './components/GoogleAITopbar';
+import { GoogleAITopbar, DeviceViewMode } from './components/GoogleAITopbar';
 import { CleanHubDashboard } from './components/CleanHubDashboard';
 import { BackOfficeAdminHub } from './components/BackOfficeAdminHub';
 import { SelfEvolvingDesignStudio } from './components/SelfEvolvingDesignStudio';
@@ -44,6 +44,28 @@ export type ActiveTabType =
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTabType>('overview');
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const [viewMode, setViewMode] = useState<DeviceViewMode>(() => {
+    try {
+      const saved = localStorage.getItem('crd_web_device_view_mode');
+      if (saved === 'iphone' || saved === 'pc') return saved;
+    } catch {
+      // ignore
+    }
+    if (typeof window !== 'undefined' && window.innerWidth >= 1024) return 'pc';
+    return 'iphone';
+  });
+
+  const handleToggleViewMode = () => {
+    setViewMode((prev) => {
+      const next: DeviceViewMode = prev === 'iphone' ? 'pc' : 'iphone';
+      try {
+        localStorage.setItem('crd_web_device_view_mode', next);
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
   const [config, setConfig] = useState<GatewayConfig>(backendGateway.getConfig());
   const [isGatewayModalOpen, setIsGatewayModalOpen] = useState(false);
   const [isLogsModalOpen, setIsLogsModalOpen] = useState(false);
@@ -204,10 +226,16 @@ export default function App() {
         onOpenExportModal={() => setIsExportModalOpen(true)}
         theme={theme}
         onToggleTheme={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+        viewMode={viewMode}
+        onToggleViewMode={handleToggleViewMode}
       />
 
-      {/* Main Container (z-10, Safe Bottom Clearance) */}
-      <main className="relative z-10 flex-1 max-w-4xl w-full mx-auto px-4 sm:px-6 pt-4 sm:pt-5 space-y-5 main-safe-bottom">
+      {/* Main Container (Adaptive Width: iPhone Compact 430px vs PC Full Workspace 7xl) */}
+      <main
+        className={`relative z-10 flex-1 w-full mx-auto px-4 sm:px-6 pt-4 sm:pt-5 space-y-5 main-safe-bottom transition-all duration-300 ${
+          viewMode === 'pc' ? 'max-w-7xl' : 'max-w-[460px]'
+        }`}
+      >
         {/* Front-Office Views */}
         {activeTab === 'overview' && (
           <CleanHubDashboard
@@ -219,6 +247,7 @@ export default function App() {
             onOpenLogsModal={() => setIsLogsModalOpen(true)}
             onOpenExportModal={() => setIsExportModalOpen(true)}
             theme={theme}
+            viewMode={viewMode}
           />
         )}
 

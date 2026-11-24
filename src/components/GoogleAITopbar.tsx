@@ -2,7 +2,9 @@ import React from 'react';
 import { GatewayConfig } from '../types';
 import { backendGateway } from '../services/backendGateway';
 import { LiquidButton } from './ui/liquid-glass-button';
-import { ChevronLeft, Moon, Sun, Settings } from 'lucide-react';
+import { ChevronLeft, Moon, Sun, Settings, Smartphone, Monitor } from 'lucide-react';
+
+export type DeviceViewMode = 'iphone' | 'pc';
 
 interface GoogleAITopbarProps {
   activeTab: string;
@@ -14,6 +16,8 @@ interface GoogleAITopbarProps {
   onOpenExportModal?: () => void;
   theme?: 'light' | 'dark';
   onToggleTheme?: () => void;
+  viewMode?: DeviceViewMode;
+  onToggleViewMode?: () => void;
 }
 
 const TAB_TITLES: Record<string, string> = {
@@ -36,6 +40,8 @@ export const GoogleAITopbar: React.FC<GoogleAITopbarProps> = ({
   onOpenGatewayModal,
   theme = 'light',
   onToggleTheme,
+  viewMode = 'iphone',
+  onToggleViewMode,
 }) => {
   const hasUrl = backendGateway.hasGatewayUrl();
   const hasToken = backendGateway.hasGatewayToken();
@@ -82,7 +88,7 @@ export const GoogleAITopbar: React.FC<GoogleAITopbarProps> = ({
           : 'bg-[#070b12]/85 border-slate-800/80 text-white'
       }`}
     >
-      <div className="max-w-4xl mx-auto flex items-center justify-between gap-2 min-h-[44px]">
+      <div className={`${viewMode === 'pc' ? 'max-w-7xl' : 'max-w-4xl'} mx-auto flex items-center justify-between gap-2 min-h-[44px] transition-all`}>
         {/* Left: Brand or Native iOS Back Button */}
         <div className="flex items-center gap-2 min-w-0">
           {!isHome ? (
@@ -123,8 +129,30 @@ export const GoogleAITopbar: React.FC<GoogleAITopbarProps> = ({
           </span>
         )}
 
-        {/* Right: Compact Touch-Friendly Controls (iPhone 15 Pro Max) */}
+        {/* Right: Compact Touch-Friendly Controls (iPhone / PC Switcher + Theme + Back Office) */}
         <div className="flex items-center gap-1.5 shrink-0">
+          {onToggleViewMode && (
+            <LiquidButton
+              onClick={onToggleViewMode}
+              type="button"
+              size="sm"
+              className="touch-target px-2.5 text-xs font-bold cursor-pointer"
+              title={viewMode === 'iphone' ? 'กำลังใช้โหมด iPhone (แตะเพื่อสลับเป็นโหมด PC เต็มจอ)' : 'กำลังใช้โหมด PC (แตะเพื่อสลับเป็นโหมด iPhone)'}
+            >
+              {viewMode === 'iphone' ? (
+                <>
+                  <Smartphone className="w-4 h-4 text-blue-600 dark:text-teal-400" />
+                  <span className="hidden xs:inline sm:inline">iPhone</span>
+                </>
+              ) : (
+                <>
+                  <Monitor className="w-4 h-4 text-indigo-600 dark:text-teal-400" />
+                  <span className="hidden xs:inline sm:inline">PC</span>
+                </>
+              )}
+            </LiquidButton>
+          )}
+
           {onToggleTheme && (
             <LiquidButton
               onClick={onToggleTheme}

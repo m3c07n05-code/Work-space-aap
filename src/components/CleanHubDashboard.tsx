@@ -37,10 +37,12 @@ interface CleanHubDashboardProps {
   onOpenLogsModal: () => void;
   onOpenExportModal?: () => void;
   theme: 'light' | 'dark';
+  viewMode?: 'iphone' | 'pc';
 }
 
 export const CleanHubDashboard: React.FC<CleanHubDashboardProps> = ({
   onNavigate,
+  viewMode = 'iphone',
 }) => {
   // หน้าบ้าน (Front Office): เฉพาะงานปฏิบัติการจริงพร้อมภาพการ์ตูน 3D Station ต้นฉบับ
   const frontCards = [
@@ -122,8 +124,8 @@ export const CleanHubDashboard: React.FC<CleanHubDashboardProps> = ({
         </p>
       </GlassBox>
 
-      {/* Primary Front-Office Action Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {/* Primary Front-Office Action Cards (1-Col on iPhone Mode, 3-Col Wide Grid on PC Mode) */}
+      <div className={`grid gap-4 ${viewMode === 'pc' ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3' : 'grid-cols-1'}`}>
         {frontCards.map((card) => (
           <GlassBox
             key={card.id}
