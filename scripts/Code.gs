@@ -402,6 +402,41 @@ function doPost(e) {
         });
       }
 
+      // 7b. Workstream Live Operations Dispatch (WORK 1 / WORK 2 / WORK 6)
+      if (
+        action === 'WORK1_GMAIL_PULL' ||
+        action === 'WORK2_EXPEL_SYNC' ||
+        action === 'WORK6_CHECKLIST_VERIFY'
+      ) {
+        const eventId = payload.idempotency_key || ('evt_' + Utilities.getUuid().slice(0, 8));
+        const enqueued = enqueueJob_(manifest, {
+          jobId: payload.jobId || payload.job_id,
+          type: action,
+          taskId: payload.taskId || action,
+          title: String(payload.title || payload.label || action),
+          source: String(payload.source || 'CRD_LIVE_OPERATIONS_PANEL'),
+          docId: payload.docId || DOC_B_ID,
+          contentHash: payload.contentHash || '',
+          promptText: String(payload.promptText || payload.description || action),
+          executionLane: String(payload.executionLane || payload.lane || 'LOCAL_CMS2'),
+          callbackCmd: '',
+          callbackDepth: 0
+        }, nowIso);
+        saveManifest_(manifest, payload.workspaceId, payload.targetManifest);
+        return jsonResponse_({
+          success: true,
+          queued: true,
+          deduplicated: Boolean(enqueued.deduplicated),
+          status: 'PENDING',
+          action: action,
+          jobId: enqueued.job.jobId,
+          job_id: enqueued.job.jobId,
+          eventId: eventId,
+          timestamp: nowIso,
+          message: 'Workstream action ' + action + ' queued successfully in PENDING state'
+        });
+      }
+
       // 8. Persistent Job Queue (Doc-B-to-GAS Auto-Queue Bridge + Google Tracker + Cloud Auto-Router)
       if (action === 'SUBMIT_JOB') {
         const promptText = String(payload.promptText || payload.description || payload.title || '');
