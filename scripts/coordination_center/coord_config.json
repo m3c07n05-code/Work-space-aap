@@ -1,0 +1,51 @@
+{
+  "schema_version": "1.0.0",
+  "task_id": "CRD-COORD-SPLIT-SCRIPTS-MODULAR-20261125",
+  "zero_pii_enforced": true,
+  "zero_secret_enforced": true,
+  "cutoff_window": {
+    "start_day": 21,
+    "end_day": 5,
+    "description": "Monthly Coordination Center intake window: day 21 of previous month through day 5 of report month"
+  },
+  "gmail_mailbox": "njnatee.99@gmail.com",
+  "onedrive_relative_roots": {
+    "scripts_root": "CRD PROJECT\\SCRIPTS\\COORDINATION_CENTER",
+    "work1_scripts_root": "CRD PROJECT\\SCRIPTS\\WORK1",
+    "coordination_base": "ศูนย์ประสานงาน",
+    "staging_output": "CRD PROJECT\\SCRIPTS\\COORDINATION_CENTER\\STAGING"
+  },
+  "guardrails": {
+    "no_auto_print": true,
+    "no_auto_send_sms": true,
+    "no_auto_send_email": true,
+    "read_only_protected_paths": [
+      "00_MASTER_SOURCE",
+      "D:\\COOP\\VIEWREPORT",
+      "Desktop\\งานผู้จัดการ",
+      "S:\\2026",
+      "S:\\"
+    ]
+  },
+  "categories": [
+    { "code": "01", "folder": "01 รายงานประจำเดือน", "keywords": ["ประจำเดือน", "monthly", "รายงานเดือน"] },
+    { "code": "02", "folder": "02 ติดตามหนี้และลูกหนี้ค้างชำระ", "keywords": ["ติดตามหนี้", "ค้างชำระ", "ลูกหนี้"] },
+    { "code": "03", "folder": "03 ผ่อนผันและปรับโครงสร้างหนี้", "keywords": ["ผ่อนผัน", "ปรับโครงสร้าง", "ขยายเวลา"] },
+    { "code": "04", "folder": "04 ปรับอัตราดอกเบี้ยผิดนัด", "keywords": ["ดอกเบี้ยผิดนัด", "ปรับอัตราดอกเบี้ย", "อัตราดอกเบี้ย"] },
+    { "code": "05", "folder": "05 พ้นสมาชิกภาพ", "keywords": ["พ้นสมาชิกภาพ", "ลาออก", "พ้นสภาพ", "พม."] },
+    { "code": "06", "folder": "06 หนังสือบอกกล่าวและกฎหมาย", "keywords": ["บอกกล่าว", "กฎหมาย", "ทวงถาม"] },
+    { "code": "07", "folder": "07 เอกสารอื่นๆ", "keywords": [] }
+  ],
+  "branches": [
+    { "branch_id": "BR-01", "name": "ศูนย์ประสานงานที่ 1", "status": "CONFIRMED", "sender_domains_or_aliases": [] },
+    { "branch_id": "BR-02", "name": "ศูนย์ประสานงานที่ 2", "status": "CONFIRMED", "sender_domains_or_aliases": [] },
+    { "branch_id": "BR-03", "name": "ศูนย์ประสานงานที่ 3", "status": "CONFIRMED", "sender_domains_or_aliases": [] },
+    { "branch_id": "BR-04", "name": "ศูนย์ประสานงานที่ 4", "status": "CONFIRMED", "sender_domains_or_aliases": [] },
+    { "branch_id": "BR-05", "name": "ศูนย์ประสานงานที่ 5", "status": "CONFIRMED", "sender_domains_or_aliases": [] },
+    { "branch_id": "BR-06", "name": "ศูนย์ประสานงานที่ 6", "status": "CONFIRMED", "sender_domains_or_aliases": [] },
+    { "branch_id": "BR-07", "name": "ศูนย์ประสานงานที่ 7", "status": "CONFIRMED", "sender_domains_or_aliases": [] },
+    { "branch_id": "BR-08", "name": "ศูนย์ประสานงานที่ 8", "status": "CONFIRMED", "sender_domains_or_aliases": [] },
+    { "branch_id": "BR-09", "name": "ศูนย์ประสานงานที่ 9", "status": "CONFIRMED", "sender_domains_or_aliases": [] },
+    { "branch_id": "BR-10", "name": "ศูนย์ประสานงานที่ 10 (Candidate +1)", "status": "CANDIDATE", "sender_domains_or_aliases": [] }
+  ]
+}
