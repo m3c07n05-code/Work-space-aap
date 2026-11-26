@@ -402,6 +402,49 @@ function doPost(e) {
         });
       }
 
+      // 7b. Modular Coordination Center & WORK 1 Standalone Job Routes (CMS2_LOCAL, Zero-PII)
+      if (
+        action === 'COORD_01_GMAIL_INTAKE' ||
+        action === 'COORD_02_RECEIPT_SUMMARY' ||
+        action === 'COORD_03_INTEREST_RATE_PREP' ||
+        action === 'WORK1_TERMINATION_PREP'
+      ) {
+        const reportMonth = String(payload.reportMonth || payload.month || Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM')).trim();
+        const taskId = String(payload.taskId || (action + '-' + reportMonth)).trim();
+        const enqueuedMod = enqueueJob_(manifest, {
+          jobId: payload.jobId,
+          type: action,
+          taskType: action,
+          taskId: taskId,
+          title: String(payload.title || (action + ' (' + reportMonth + ')')).slice(0, 120),
+          source: String(payload.source || 'MODULAR_API_ROUTE'),
+          docId: payload.docId || DOC_B_ID,
+          contentHash: String(payload.contentHash || ''),
+          promptText: String(payload.promptText || (action + ' month=' + reportMonth)).slice(0, 500),
+          reportMonth: reportMonth,
+          since: payload.since ? String(payload.since).trim() : '',
+          before: payload.before ? String(payload.before).trim() : '',
+          dryRun: Boolean(payload.dryRun),
+          executionLane: 'CMS2_LOCAL'
+        }, nowIso);
+        if (enqueuedMod.inserted) {
+          saveManifest_(manifest, payload.workspaceId, payload.targetManifest);
+          syncJobToGoogleTrackers_('SUBMIT', enqueuedMod.job, payload);
+        }
+        return jsonResponse_({
+          success: true,
+          action: action,
+          queued: true,
+          deduplicated: !enqueuedMod.inserted,
+          jobId: enqueuedMod.job.jobId,
+          status: enqueuedMod.job.status,
+          executionLane: 'CMS2_LOCAL',
+          reportMonth: reportMonth,
+          job: enqueuedMod.job,
+          timestamp: nowIso
+        });
+      }
+
       // 8. Persistent Job Queue (Doc-B-to-GAS Auto-Queue Bridge + Google Tracker + Cloud Auto-Router)
       if (action === 'SUBMIT_JOB') {
         const promptText = String(payload.promptText || payload.description || payload.title || '');
@@ -998,7 +1041,7 @@ function enqueueJob_(manifest, spec, nowIso) {
   const newJob = {
     jobId: jobId,
     type: String(spec.type || 'DOC_B_DISPATCH'),
-    taskType: String(spec.type || 'DOC_B_DISPATCH'),
+    taskType: String(spec.taskType || spec.type || 'DOC_B_DISPATCH'),
     taskId: String(spec.taskId || ''),
     title: String(spec.title || 'Doc B Dispatch').slice(0, 180),
     status: 'PENDING',
@@ -1009,6 +1052,10 @@ function enqueueJob_(manifest, spec, nowIso) {
     promptText: promptStr,
     callbackPrompt: String(spec.callbackPrompt || '').slice(0, 500),
     callbackDepth: Number(spec.callbackDepth || 0) || 0,
+    reportMonth: spec.reportMonth ? String(spec.reportMonth).trim() : '',
+    since: spec.since ? String(spec.since).trim() : '',
+    before: spec.before ? String(spec.before).trim() : '',
+    dryRun: Boolean(spec.dryRun),
     createdAtIso: nowIso
   };
 

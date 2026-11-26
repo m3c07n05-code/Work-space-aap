@@ -50,6 +50,10 @@ DISPATCH_LOG_FILE = os.path.join(RUNTIME_DIR, "doc_b_dispatch.log")
 ALLOWED_TASKS = {
     "DEVICE_HEARTBEAT",
     "DOC_B_DISPATCH",
+    "COORD_01_GMAIL_INTAKE",
+    "COORD_02_RECEIPT_SUMMARY",
+    "COORD_03_INTEREST_RATE_PREP",
+    "WORK1_TERMINATION_PREP",
     "WORK1_PRINT",
     "WORK2_FOLLOWUP",
     "WORK3_SMS_PREVIEW",
@@ -63,6 +67,51 @@ ALLOWED_TASKS = {
     "V003_SPLIT_077",
     "INBOX_WATCHER_10MIN"
 }
+
+# Modular standalone scripts (decoupled from legacy monolithic WORK1_GMAIL_PULL)
+MODULAR_SCRIPT_CATALOG: Dict[str, str] = {
+    "COORD_01_GMAIL_INTAKE": os.path.join("SCRIPTS", "COORDINATION_CENTER", "coord_01_gmail_intake.py"),
+    "COORD_02_RECEIPT_SUMMARY": os.path.join("SCRIPTS", "COORDINATION_CENTER", "coord_02_receipt_summary.py"),
+    "COORD_03_INTEREST_RATE_PREP": os.path.join("SCRIPTS", "COORDINATION_CENTER", "coord_03_interest_rate_prep.py"),
+    "WORK1_TERMINATION_PREP": os.path.join("SCRIPTS", "WORK1", "work1_termination_prep.py"),
+}
+
+
+def verify_onedrive_anchor(action: str, workspace_dir: str = WORKSPACE_DIR_DEFAULT) -> Dict[str, Any]:
+    """
+    Fail-closed folder-existence guard: verifies OneDrive root, CRD PROJECT root,
+    ศูนย์ประสานงาน root, and the target modular script exist before execution.
+    Never creates duplicate root folders if a configured OneDrive path was moved.
+    """
+    rel_script = MODULAR_SCRIPT_CATALOG.get(action, "")
+    if not rel_script:
+        return {"ok": False, "error": f"FAIL_CLOSED_UNKNOWN_MODULAR_ACTION: {action}"}
+    onedrive_root = os.path.dirname(workspace_dir.rstrip("\\/"))
+    coord_root = os.path.join(onedrive_root, "ศูนย์ประสานงาน")
+    script_path = os.path.join(workspace_dir, rel_script)
+    missing = []
+    for label, p in (
+        ("onedrive_root", onedrive_root),
+        ("crd_project_root", workspace_dir),
+        ("coordination_root", coord_root),
+    ):
+        if not os.path.isdir(p):
+            missing.append(f"{label}={p}")
+    if not os.path.isfile(script_path):
+        missing.append(f"script={script_path}")
+    if missing:
+        return {
+            "ok": False,
+            "error": "FAIL_CLOSED_ANCHOR_MISSING: " + "; ".join(missing),
+            "script_path": script_path,
+        }
+    return {
+        "ok": True,
+        "onedrive_root": onedrive_root,
+        "workspace_dir": workspace_dir,
+        "coord_root": coord_root,
+        "script_path": script_path,
+    }
 
 
 def validate_task_allowlist(task_name: str) -> bool:
@@ -455,8 +504,108 @@ def fetch_doc_b_top_active_job() -> Optional[Dict[str, Any]]:
     }
 
 
+def handle_modular_script_job(job: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
+    """
+    Independently validates, claims, executes, and completes a modular allowlisted
+    Coordination Center / WORK 1 job with fail-closed OneDrive anchor verification
+    and PYTHONDONTWRITEBYTECODE=1 (Zero-PII, Zero-Secret, NO_AUTO_PRINT).
+    """
+    job_type = str(job.get("taskType") or job.get("type") or "").strip().upper()
+    if not validate_task_allowlist(job_type) or job_type not in MODULAR_SCRIPT_CATALOG:
+        return {"success": False, "status": "REJECTED_ALLOWLIST", "jobId": job.get("jobId")}
+
+    job_id = str(job.get("jobId") or f"MOD-{job_type}-{int(time.time())}").strip()
+    task_id = str(job.get("taskId") or job_type).strip()
+    content_hash = str(job.get("contentHash") or "").strip()
+
+    anchor = verify_onedrive_anchor(job_type)
+    if not anchor.get("ok"):
+        err_msg = str(anchor.get("error", "FAIL_CLOSED_ANCHOR_MISSING"))
+        _log_dispatch(f"ABORTED {job_type} ({job_id}): {err_msg}")
+        if not dry_run and job.get("jobId"):
+            emit_stage_alert("STAGE_2", job_id, task_id, "FAILED", err_msg)
+            complete_job(job_id, "FAILED", err_msg)
+        return {"success": False, "status": "FAIL_CLOSED_ANCHOR_MISSING", "jobId": job_id, "error": err_msg}
+
+    cache = _load_processed_cache()
+    if not dry_run and (job_id in cache.get("job_ids", []) or (content_hash and content_hash in cache.get("content_hashes", []))):
+        _log_dispatch(f"Skipping already-processed modular job {job_id} ({job_type})")
+        return {"success": True, "status": "SKIPPED_DUPLICATE", "jobId": job_id}
+
+    effective_dry_run = bool(dry_run or job.get("dryRun", False))
+    report_month = str(job.get("reportMonth") or job.get("month") or datetime.now().strftime("%Y-%m")).strip()
+    cmd = [sys.executable, "-B", anchor["script_path"], "--month", report_month]
+    if job_type == "COORD_01_GMAIL_INTAKE":
+        if job.get("since"):
+            cmd.extend(["--since", str(job["since"]).strip()])
+        if job.get("before"):
+            cmd.extend(["--before", str(job["before"]).strip()])
+        if job.get("inputExport"):
+            cmd.extend(["--input-export", str(job["inputExport"]).strip()])
+    if effective_dry_run:
+        cmd.append("--dry-run")
+
+    if not dry_run:
+        claim_res = claim_job(job_id)
+        if not claim_res.get("claimed"):
+            _log_dispatch(f"Modular job {job_id} could not be claimed: {claim_res.get('error', 'already claimed')}")
+            return {"success": False, "status": "NOT_CLAIMED", "jobId": job_id}
+        emit_stage_alert("STAGE_1", job_id, task_id, "IN_PROGRESS", f"Claimed {job_type} on CMS-2 (month={report_month})")
+
+    final_status = "DONE"
+    summary = f"{job_type} completed (month={report_month}, dry_run={effective_dry_run})"
+    script_output: Dict[str, Any] = {}
+    try:
+        custom_env = os.environ.copy()
+        custom_env["PYTHONDONTWRITEBYTECODE"] = "1"
+        proc = subprocess.run(
+            cmd,
+            cwd=anchor["workspace_dir"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=300,
+            env=custom_env,
+            creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0),
+        )
+        stdout_text = (proc.stdout or "").strip()
+        stderr_text = (proc.stderr or "").strip()
+        if proc.returncode != 0:
+            final_status = "FAILED"
+            summary = f"{job_type} exit={proc.returncode} ({(stderr_text or stdout_text)[-180:]})"
+        else:
+            last_line = stdout_text.splitlines()[-1] if stdout_text else "{}"
+            try:
+                script_output = json.loads(last_line)
+                summary = f"{job_type} OK (month={report_month}, status={script_output.get('status', 'OK')}, zero_pii=True)"
+            except Exception:
+                summary = f"{job_type} OK (month={report_month}, zero_pii=True)"
+    except Exception as e:
+        final_status = "FAILED"
+        summary = f"{job_type} exception: {type(e).__name__}: {e}"
+
+    if not dry_run:
+        if final_status == "DONE":
+            cache.setdefault("job_ids", []).append(job_id)
+            if content_hash:
+                cache.setdefault("content_hashes", []).append(content_hash)
+            _save_processed_cache(cache)
+        emit_stage_alert("STAGE_2", job_id, task_id, final_status, summary)
+        complete_job(job_id, final_status, summary)
+
+    return {
+        "success": final_status == "DONE",
+        "status": "DRY_RUN_OK" if (dry_run and final_status == "DONE") else final_status,
+        "jobId": job_id,
+        "action": job_type,
+        "summary": summary,
+        "scriptOutput": script_output,
+    }
+
+
 def poll_and_process_pending_jobs(dry_run: bool = False) -> Dict[str, Any]:
-    """Fetches PENDING_JOBS from GAS (plus local Doc B fallback) and processes allowlisted DOC_B_DISPATCH jobs."""
+    """Fetches PENDING_JOBS from GAS (plus local Doc B fallback) and processes allowlisted CMS-2 jobs."""
     res = fetch_pending_jobs()
     if not res.get("success"):
         return {"success": False, "error": res.get("error", "Failed to fetch pending jobs"), "processed": 0}
@@ -485,6 +634,8 @@ def poll_and_process_pending_jobs(dry_run: bool = False) -> Dict[str, Any]:
         job_type = str(job.get("taskType") or job.get("type") or "").strip().upper()
         if job_type == "DOC_B_DISPATCH":
             results.append(handle_doc_b_dispatch(job, dry_run=dry_run))
+        elif job_type in MODULAR_SCRIPT_CATALOG:
+            results.append(handle_modular_script_job(job, dry_run=dry_run))
         else:
             validate_task_allowlist(job_type or "UNKNOWN")
 
@@ -709,6 +860,21 @@ if __name__ == "__main__":
         valid = validate_task_allowlist(t_name)
         print(f"Task '{t_name}' validation: {'ACCEPTED' if valid else 'REJECTED'}")
         sys.exit(0 if valid else 1)
+    elif "--run-modular" in sys.argv:
+        m_idx = sys.argv.index("--run-modular") + 1
+        m_action = sys.argv[m_idx].strip().upper() if m_idx < len(sys.argv) else ""
+        month_val = datetime.now().strftime("%Y-%m")
+        if "--month" in sys.argv:
+            mo_idx = sys.argv.index("--month") + 1
+            if mo_idx < len(sys.argv):
+                month_val = sys.argv[mo_idx].strip()
+        dry_run = "--dry-run" in sys.argv
+        out = handle_modular_script_job(
+            {"jobId": f"CLI-{m_action}", "taskType": m_action, "taskId": m_action, "reportMonth": month_val, "dryRun": dry_run},
+            dry_run=dry_run,
+        )
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        sys.exit(0 if out.get("success") else 1)
     elif "--poll-jobs-only" in sys.argv:
         dry_run = "--dry-run" in sys.argv
         out = poll_and_process_pending_jobs(dry_run=dry_run)
