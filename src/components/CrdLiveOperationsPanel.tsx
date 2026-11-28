@@ -41,7 +41,7 @@ export const CrdLiveOperationsPanel: React.FC = () => {
   ];
 
   return (
-    <GlassBox variant="frosted" className="p-5 sm:p-6 space-y-4">
+    <GlassBox variant="frosted" className="p-4 sm:p-6 space-y-3">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
@@ -93,7 +93,7 @@ export const CrdLiveOperationsPanel: React.FC = () => {
             </div>
 
             <span
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold shrink-0 self-start sm:self-center ${
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-semibold shrink-0 self-start sm:self-center ${
                 cycle.isActiveNow
                   ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-300'
                   : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'

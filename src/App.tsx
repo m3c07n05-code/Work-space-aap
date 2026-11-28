@@ -234,7 +234,7 @@ export default function App() {
       {/* Main Container (Adaptive Width: iPhone Compact 430px vs PC Full Workspace 7xl) */}
       <main
         className={`relative z-10 flex-1 w-full mx-auto px-4 sm:px-6 pt-4 sm:pt-5 space-y-5 main-safe-bottom transition-all duration-300 ${
-          viewMode === 'pc' ? 'max-w-7xl' : 'max-w-[460px]'
+          viewMode === 'pc' ? 'max-w-7xl' : 'max-w-full sm:max-w-[460px]'
         }`}
       >
         {/* Front-Office Views */}
